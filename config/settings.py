@@ -61,7 +61,7 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-DB_USE_SQLITE = os.getenv("DB_USE_SQLITE", "False").lower() == "true"
+DB_USE_SQLITE = True
 
 if DATABASE_URL and not DB_USE_SQLITE:
     DATABASES = {
