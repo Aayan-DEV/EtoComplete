@@ -1,0 +1,6 @@
+django
+supabase
+python-dotenv
+dj-database-url
+psycopg[binary]
+requests
