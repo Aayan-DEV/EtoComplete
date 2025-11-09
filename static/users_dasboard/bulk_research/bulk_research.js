@@ -114,15 +114,6 @@
         console.error('Stream update error', e, obj);
       }
     };
-
-    es.onerror = function () {
-      var attempt = (streamRetries && streamRetries[sessionId]) || 0;
-      console.warn('SSE error on session', sessionId, '— reconnecting (attempt', attempt + 1, ')');
-      if (typeof scheduleReconnect === 'function') {
-        try { scheduleReconnect(sessionId); } catch (e) { console.error('scheduleReconnect failed', e); }
-      }
-      try { es.close(); } catch (_) {}
-    };
 }
 
     // renderAggregatedFromCache: merge cached entries across sessions and render
@@ -869,6 +860,15 @@ window.addEventListener('keydown', function (e) {
   setTimeout(remove, 3500);
 }
 
+// Attach only the selected session's stream on load (avoid starting all sessions)
+  function ensureStreamForSelected() {
+    var selected = (resultsSelect && resultsSelect.value) || sessionStorage.getItem(SELECT_STORAGE_KEY);
+    if (selected && selected !== '__all__') {
+      attachStream(selected);
+    }
+  }
+  ensureStreamForSelected();
+
 function showConfirmDelete(session) {
   return new Promise(function (resolve) {
     var overlay = document.createElement('div');
@@ -1074,6 +1074,7 @@ function showConfirmDelete(session) {
 
   if (remaining === 0) { showLoading(false); }
 }
+
 
   function renderProductsGrid(entries) {
   productsGrid.innerHTML = '';

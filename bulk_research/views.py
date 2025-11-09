@@ -68,19 +68,15 @@ def bulk_research_stream(request, session_id: int):
     except BulkResearchSession.DoesNotExist:
         raise Http404("Session not found")
 
-    try:
-        bulk_stream_manager.ensure_worker(session, user_id=request.user.username)
-    except Exception:
-        pass
-
     def to_event(obj):
         return f"data: {json.dumps(obj)}\n\n"
 
+    # IMPORTANT: do not auto-start worker here to avoid duplicate upstream runs.
     sub = bulk_stream_manager.subscribe_events(session.id)
 
     def proxy():
         try:
-            # Send snapshot so UI updates immediately on connect/reconnect
+            # Send snapshot first — prefer in-memory worker snapshot; otherwise read from DB.
             snap = bulk_stream_manager.get_snapshot(session.id)
             if snap:
                 yield to_event({
@@ -89,9 +85,30 @@ def bulk_research_stream(request, session_id: int):
                     'progress': snap.get('progress'),
                     'entries_count': len(snap.get('entries') or []),
                 })
+            else:
+                # Fallback from DB when no worker is active
+                try:
+                    rf = json.loads(session.result_file or '{}')
+                except Exception:
+                    rf = {}
+                entries = rf.get('entries') or []
+                progress = session.progress or BulkResearchSession.build_initial_progress(session.desired_total)
+                yield to_event({
+                    'stage': 'snapshot',
+                    'status': session.status,
+                    'progress': progress,
+                    'entries_count': len(entries),
+                })
+
+            # Stream live events if a worker is present; otherwise keep connection alive with heartbeats.
             if sub is not None:
                 for evt in sub:
                     yield to_event(evt)
+            else:
+                # Avoid client auto-reconnect loops by keeping a live heartbeat
+                while True:
+                    yield to_event({'stage': 'heartbeat', 'ts': int(time.time())})
+                    time.sleep(15)
         except (GeneratorExit, BrokenPipeError, ConnectionResetError, OSError):
             # Client disconnected; stop streaming quietly
             return
