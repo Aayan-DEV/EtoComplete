@@ -80,6 +80,7 @@ DB_USE_SQLITE = os.getenv("DB_USE_SQLITE", "False").lower() == "true"
 DB_CONN_MAX_AGE = int(os.getenv("DB_CONN_MAX_AGE", "60"))
 DB_SSL_REQUIRE = os.getenv("DB_SSL_REQUIRE", "True").lower() == "true"
 
+# Force IPv4 / alternate host if needed
 DATABASE_HOST_OVERRIDE = os.getenv("DATABASE_HOST")
 DATABASE_PORT_OVERRIDE = os.getenv("DATABASE_PORT")
 
