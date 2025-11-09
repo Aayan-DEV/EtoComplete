@@ -137,8 +137,17 @@ html, body { background: var(--bg); color: var(--text); }
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--border);
   border-radius: 0.5rem;
-  background: white;
-  color: var(--text);
+  background: var(--surface-1);   /* theme-adaptive */
+  color: var(--text);              /* theme-adaptive */
+}
+
+.wizard-input::placeholder {
+  color: var(--muted);
+}
+.wizard-input:focus {
+  outline: 2px solid var(--border);
+  outline-offset: 2px;
+  background: var(--surface-2);
 }
 
 .wizard-actions {
@@ -165,4 +174,14 @@ html, body { background: var(--bg); color: var(--text); }
   .wizard-card { max-height: calc(100vh - 1rem); }
 }
 
-#filter-bar select { min-width: 9rem; }
+#filter-bar select {
+  min-width: 9rem;
+  background: var(--surface-1);
+  color: var(--text);
+  border-color: var(--border);
+}
+#filter-bar select:focus {
+  outline: 2px solid var(--border);
+  outline-offset: 2px;
+  background: var(--surface-2);
+}
