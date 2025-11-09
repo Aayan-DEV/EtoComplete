@@ -83,10 +83,13 @@ if DATABASE_URL:
     DATABASES = {
         "default": dj_database_url.parse(
             DATABASE_URL,
-            conn_max_age=int(os.getenv("DB_CONN_MAX_AGE", "60")),
+            conn_max_age=int(os.getenv("DB_CONN_MAX_AGE", "0")),  # default: do not persist connections
             ssl_require=True,
         )
     }
+    # Pooler-friendly options
+    DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
+    DATABASES["default"]["DISABLE_SERVER_SIDE_CURSORS"] = True
 else:
     DATABASES = {
         "default": {

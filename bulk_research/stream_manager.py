@@ -64,6 +64,11 @@ class SessionWorker:
             BulkResearchSession.objects.filter(id=self.session_id).update(progress=self.progress)
         except Exception:
             pass
+        finally:
+            try:
+                connection.close()  # release DB slot after each write
+            except Exception:
+                pass
 
     def _persist_entries(self):
         try:
@@ -72,6 +77,25 @@ class SessionWorker:
             )
         except Exception:
             pass
+        finally:
+            try:
+                connection.close()  # release DB slot after each write
+            except Exception:
+                pass
+
+    def _mark_completed(self):
+        try:
+            BulkResearchSession.objects.filter(id=self.session_id).update(
+                status='completed',
+                completed_at=timezone.now()
+            )
+        except Exception:
+            pass
+        finally:
+            try:
+                connection.close()  # release DB slot after each write
+            except Exception:
+                pass
 
     def _persist_entries_throttled(self, min_interval_sec: float = 3.0, min_growth: int = 5):
         try:
@@ -162,7 +186,7 @@ class SessionWorker:
         upstream = None
 
         while not self.stop_event.is_set():
-            # Ensure this worker has a fresh DB connection
+            # Ensure fresh DB connection per loop to avoid stale/persistent sessions
             try:
                 close_old_connections()
             except Exception:
