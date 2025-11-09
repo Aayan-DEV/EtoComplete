@@ -6,7 +6,6 @@ import os
 from dotenv import load_dotenv
 import dj_database_url
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env", override=True)
 
@@ -20,13 +19,15 @@ ALLOWED_HOSTS = [h.strip() for h in os.getenv(
 ).split(",") if h.strip()]
 
 # CSRF trusted origins must be full origins (scheme://host)
-CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.getenv(
-    "CSRF_TRUSTED_ORIGINS",
-    "http://127.0.0.1:8000,http://localhost:8000,https://etocomplete-production.up.railway.app,https://*.railway.app,https://knowing-quail-helped.ngrok-free.app"
-).split(",") if o.strip()]
+CSRF_TRUSTED_ORIGINS = [
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+    "https://etocomplete-production.up.railway.app",
+    "https://*.railway.app",
+    "https://knowing-quail-helped.ngrok-free.app",
+]
 
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
-
 # Application definition
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -75,7 +76,7 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-DB_USE_SQLITE = True
+DB_USE_SQLITE = os.getenv("DB_USE_SQLITE", "False").lower() == "true"
 
 if DATABASE_URL and not DB_USE_SQLITE:
     DATABASES = {
@@ -92,7 +93,6 @@ else:
             "NAME": BASE_DIR / "db.sqlite3",
         }
     }
-
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
 
