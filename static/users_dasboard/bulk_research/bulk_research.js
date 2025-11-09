@@ -246,7 +246,7 @@
     });
   }
 
-    // Generalized metric accessor (now supports Demand)
+    // Generalized metric accessor (now supports Demand).
   function metricValueOf(entry, metric) {
     switch (String(metric || '').toLowerCase()) {
       case 'price':
