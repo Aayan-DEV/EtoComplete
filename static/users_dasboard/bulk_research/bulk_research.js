@@ -30,7 +30,10 @@
   var sessions = Array.isArray(window.INITIAL_SESSIONS) ? window.INITIAL_SESSIONS.slice() : [];
   var sessionResultsCache = {}; // { id: entries[] }
   var sessionCounts = {};       // { id: number }
-  var streams = {}; // { id: EventSource }
+  var streams = {};             // { id: EventSource }
+  var streamRetries = {};       // { id: number }
+  var POLL_INTERVAL_MS = 2000;
+  var pollTimer = null;
 
   // Current view and sort state
   var lastEntriesRaw = [];
@@ -60,6 +63,187 @@
     var amount = priceObj.amount, divisor = priceObj.divisor;
     if (typeof amount === 'number' && typeof divisor === 'number' && divisor) return amount / divisor;
     return null;
+  }
+
+  // Attach streams for all ongoing sessions at load (resumes live after refresh)
+  function ensureStreamsAttached() {
+    sessions.forEach(function (s) {
+      if (s && s.status === 'ongoing') {
+        attachStream(s.id);
+      }
+    });
+  }
+  ensureStreamsAttached();
+
+  // SSE stream with auto-reconnect and snapshot hydration
+  function attachStream(sessionId) {
+    try { if (streams[sessionId]) { streams[sessionId].close(); } } catch (_) {}
+    var es = new EventSource(window.BULK_RESEARCH_STREAM_URL_BASE + sessionId + '/');
+    streams[sessionId] = es;
+    streamRetries[sessionId] = 0;
+
+    es.onopen = function () { streamRetries[sessionId] = 0; };
+
+    es.onmessage = function (ev) {
+      try {
+        var data = JSON.parse(ev.data);
+        handleStreamUpdate(sessionId, data);
+      } catch (_) {}
+    };
+
+    es.onerror = function () {
+      scheduleReconnect(sessionId);
+      try { es.close(); } catch (_) {}
+    };
+  }
+
+  function scheduleReconnect(sessionId) {
+    var s = findSession(sessionId);
+    if (!s || s.status === 'completed' || s.status === 'failed') return;
+    var attempt = (streamRetries[sessionId] || 0) + 1;
+    streamRetries[sessionId] = attempt;
+    var delay = Math.min(15000, 500 * Math.pow(2, attempt - 1)); // 0.5s → 15s
+    setTimeout(function () {
+      attachStream(sessionId);
+      var selected = resultsSelect && resultsSelect.value;
+      if (selected === '__all__') {
+        loadAllSessionsResults();
+      } else if (String(selected) === String(sessionId)) {
+        loadSessionResults(sessionId, true);
+      }
+    }, delay);
+  }
+
+  function handleStreamUpdate(sessionId, data) {
+    var s = findSession(sessionId);
+    if (!s) return;
+
+    // Snapshot carries full progress + entries_count (hydrates immediately)
+    if (data && typeof data.progress === 'object') {
+      s.progress = Object.assign({}, s.progress || {}, data.progress);
+      updateSession(s);
+    }
+    if (typeof data.entries_count === 'number') {
+      sessionCounts[sessionId] = data.entries_count;
+      upsertResultsSelect();
+    }
+
+    // Apply status field directly when present
+    if (typeof data.status === 'string') {
+      s.status = data.status;
+      updateSession(s);
+    }
+
+    var stage = (data.stage || '').toLowerCase();
+    var key = mapStage(stage);
+    if (key) {
+      s.progress = s.progress || {};
+      s.progress[key] = s.progress[key] || { total: 0, remaining: 0 };
+      if (typeof data.total === 'number') s.progress[key].total = data.total;
+      if (typeof data.remaining === 'number') s.progress[key].remaining = data.remaining;
+      updateSession(s);
+    }
+
+    if (stage === 'completed') {
+      s.status = 'completed';
+      updateSession(s);
+    } else if (stage === 'error') {
+      s.status = 'failed';
+      updateSession(s);
+    }
+
+    // Update counts and results when entries arrive
+    if (data.entries || (data.megafile && data.megafile.entries)) {
+      var list = Array.isArray(data.entries)
+        ? data.entries
+        : (data.megafile && Array.isArray(data.megafile.entries) ? data.megafile.entries : []);
+      if (list && list.length >= 0) {
+        sessionResultsCache[sessionId] = list;
+        sessionCounts[sessionId] = list.length;
+        upsertResultsSelect();
+        var selected = resultsSelect && resultsSelect.value;
+        if (selected === '__all__') {
+          loadAllSessionsResults();
+        } else if (String(selected) === String(sessionId)) {
+          lastEntriesRaw = list;
+          renderProductsGrid(applySorting(list));
+        }
+      }
+    }
+  }
+
+  // Polling fallback: merge status/progress from backend every 2s
+  function pollOnce() {
+    fetch(window.BULK_RESEARCH_LIST_URL, { credentials: 'same-origin' })
+      .then(function (r) { return r.json().catch(function(){ return {}; }).then(function (j) { if (!r.ok) throw new Error(j && (j.error || ('Failed (' + r.status + ')'))); return j; }); })
+      .then(function (json) {
+        var arr = Array.isArray(json.sessions) ? json.sessions : [];
+        arr.forEach(function (remote) {
+          var local = findSession(remote.id);
+          if (!local) return;
+          var changed = false;
+          if (typeof remote.status === 'string' && remote.status !== local.status) {
+            local.status = remote.status;
+            changed = true;
+          }
+          if (remote.progress && typeof remote.progress === 'object') {
+            // Shallow merge per stage
+            local.progress = local.progress || {};
+            ['search','splitting','demand','keywords'].forEach(function (k) {
+              var rp = remote.progress[k];
+              if (rp && (typeof rp.total === 'number' || typeof rp.remaining === 'number')) {
+                var lp = local.progress[k] || { total: local.desired_total || 0, remaining: local.desired_total || 0 };
+                var newTotal = (typeof rp.total === 'number') ? rp.total : lp.total;
+                var newRem = (typeof rp.remaining === 'number') ? rp.remaining : lp.remaining;
+                if (newTotal !== lp.total || newRem !== lp.remaining) {
+                  local.progress[k] = { total: newTotal, remaining: newRem };
+                  changed = true;
+                }
+              }
+            });
+          }
+          if (changed) updateSession(local);
+        });
+      })
+      .catch(function () { /* silent */ });
+  }
+
+  function startPolling() {
+    if (pollTimer) return;
+    pollOnce();
+    pollTimer = setInterval(pollOnce, POLL_INTERVAL_MS);
+  }
+  function stopPolling() {
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  }
+  startPolling();
+  window.addEventListener('beforeunload', stopPolling);
+
+  // Keep listening when switching session
+  if (resultsSelect) {
+    resultsSelect.addEventListener('change', function () {
+      var val = resultsSelect.value;
+      productsGrid.innerHTML = '';
+      if (resultsBack) resultsBack.classList.add('hidden');
+      if (allSessionsController) { try { allSessionsController.abort(); } catch (_) {} allSessionsController = null; }
+
+      if (!val) {
+        resultsTitle.textContent = 'No session selected';
+        sessionStorage.removeItem(SELECT_STORAGE_KEY);
+        renderEmptyPrompt();
+        return;
+      }
+      sessionStorage.setItem(SELECT_STORAGE_KEY, val);
+      if (val === '__all__') {
+        resultsTitle.textContent = 'All Sessions — aggregated';
+        loadAllSessionsResults();
+      } else {
+        var s = findSession(val);
+        updateResultsTitleForSession(s);
+        attachStream(val);
+        loadSessionResults(val, true);
+      }
+    });
   }
 
     // Generalized metric accessor (now supports Demand)

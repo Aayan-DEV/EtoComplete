@@ -8,7 +8,7 @@ from django.http import JsonResponse, StreamingHttpResponse, HttpResponseBadRequ
 from django.views.decorators.http import require_POST
 from django.contrib.auth.decorators import login_required
 from django.utils import timezone
-
+from .stream_manager import bulk_stream_manager
 from .models import BulkResearchSession
 
 # Module-level: hardcoded upstream API endpoints
@@ -54,6 +54,11 @@ def bulk_research_start(request):
         progress=BulkResearchSession.build_initial_progress(desired_total),
         started_at=timezone.now(),
     )
+    # Start background listener so it keeps going across refresh/offline
+    try:
+        bulk_stream_manager.ensure_worker(session, user_id=request.user.username)
+    except Exception:
+        pass
     return JsonResponse({'session_id': session.id})
 
 @login_required
@@ -63,90 +68,29 @@ def bulk_research_stream(request, session_id: int):
     except BulkResearchSession.DoesNotExist:
         raise Http404("Session not found")
 
-    # POST to the exact upstream URL and proxy SSE back to browser
     try:
-        upstream = requests.post(
-            "http://136.116.10.105:8001/run/stream",
-            json={
-                'user_id': request.user.username,
-                'keyword': session.keyword,
-                'desired_total': session.desired_total
-            },
-            headers={
-                'Accept': 'text/event-stream',
-                'Content-Type': 'application/json'
-            },
-            stream=True,
-            timeout=120
-        )
-        if not upstream.ok:
-            return JsonResponse({'error': f'Upstream stream failed ({upstream.status_code})', 'raw': upstream.text[:300]}, status=502)
-    except Exception as e:
-        return JsonResponse({'error': f'Upstream stream error: {e}'}, status=502)
+        bulk_stream_manager.ensure_worker(session, user_id=request.user.username)
+    except Exception:
+        pass
 
     def to_event(obj):
         return f"data: {json.dumps(obj)}\n\n"
 
+    sub = bulk_stream_manager.subscribe_events(session.id)
+
     def proxy():
-        try:
-            for raw in upstream.iter_lines(decode_unicode=True):
-                if raw is None:
-                    continue
-                line = (raw or '').strip()
-                if not line:
-                    yield "\n"
-                    continue
-                if line.startswith(':'):
-                    continue  # upstream keepalive/comment
-                if line.startswith('data:'):
-                    payload = line[5:].strip()
-                    try:
-                        evt = json.loads(payload)
-                        stage = (evt.get('stage') or '').lower()
-                        remaining = evt.get('remaining')
-                        total = evt.get('total')
-                        key = _map_stage_key(stage)
-                        if key:
-                            prog = session.progress or BulkResearchSession.build_initial_progress(session.desired_total)
-                            obj = prog.get(key) or {'total': 0, 'remaining': 0}
-                            if isinstance(total, int): obj['total'] = total
-                            if isinstance(remaining, int): obj['remaining'] = remaining
-                            prog[key] = obj
-                            session.progress = prog
-                            session.save(update_fields=['progress'])
-
-                        # If upstream ever includes entries/megafile, persist them
-                        try:
-                            entries = None
-                            if isinstance(evt.get('megafile'), dict) and isinstance(evt['megafile'].get('entries'), list):
-                                entries = evt['megafile']['entries']
-                            elif isinstance(evt.get('entries'), list):
-                                entries = evt['entries']
-                            if entries:
-                                session.result_file = json.dumps({'entries': entries})
-                                session.save(update_fields=['result_file'])
-                        except Exception:
-                            pass
-
-                        # Mark completed when all stages reach zero remaining
-                        try:
-                            prog = session.progress or {}
-                            if all((prog.get(k, {}).get('remaining', 1) == 0) for k in ('search', 'splitting', 'demand', 'keywords')):
-                                session.status = 'completed'
-                                session.completed_at = timezone.now()
-                                session.save(update_fields=['status', 'completed_at'])
-                        except Exception:
-                            pass
-
-                        yield to_event(evt)
-                    except Exception:
-                        yield f"data: {payload}\n\n"
-                    time.sleep(0.01)
-        finally:
-            try:
-                upstream.close()
-            except Exception:
-                pass
+        # Send snapshot so UI updates immediately on connect/reconnect
+        snap = bulk_stream_manager.get_snapshot(session.id)
+        if snap:
+            yield to_event({
+                'stage': 'snapshot',
+                'status': snap.get('status'),
+                'progress': snap.get('progress'),
+                'entries_count': len(snap.get('entries') or []),
+            })
+        if sub is not None:
+            for evt in sub:
+                yield to_event(evt)
 
     resp = StreamingHttpResponse(proxy(), content_type='text/event-stream')
     resp['Cache-Control'] = 'no-cache'
@@ -160,19 +104,23 @@ def bulk_research_result(request, session_id: int):
     except BulkResearchSession.DoesNotExist:
         raise Http404("Session not found")
 
-    raw = {}
-    try:
-        if session.result_file:
-            raw = json.loads(session.result_file)
-    except Exception:
-        raw = {}
-
+    # Prefer in-memory snapshot for live updates before final DB save
+    snap = bulk_stream_manager.get_snapshot(session_id)
     entries = []
-    if isinstance(raw, dict):
-        if isinstance(raw.get('entries'), list):
-            entries = raw['entries']
-        elif raw.get('megafile') and isinstance(raw['megafile'].get('entries'), list):
-            entries = raw['megafile']['entries']
+    if snap and isinstance(snap.get('entries'), list) and snap['entries']:
+        entries = snap['entries']
+    else:
+        raw = {}
+        try:
+            if session.result_file:
+                raw = json.loads(session.result_file)
+        except Exception:
+            raw = {}
+        if isinstance(raw, dict):
+            if isinstance(raw.get('entries'), list):
+                entries = raw['entries']
+            elif raw.get('megafile') and isinstance(raw['megafile'].get('entries'), list):
+                entries = raw['megafile']['entries']
 
     simplified = []
     for entry in entries:
