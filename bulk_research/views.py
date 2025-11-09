@@ -79,23 +79,41 @@ def bulk_research_stream(request, session_id: int):
     sub = bulk_stream_manager.subscribe_events(session.id)
 
     def proxy():
-        # Send snapshot so UI updates immediately on connect/reconnect
-        snap = bulk_stream_manager.get_snapshot(session.id)
-        if snap:
-            yield to_event({
-                'stage': 'snapshot',
-                'status': snap.get('status'),
-                'progress': snap.get('progress'),
-                'entries_count': len(snap.get('entries') or []),
-            })
-        if sub is not None:
-            for evt in sub:
-                yield to_event(evt)
+        try:
+            # Send snapshot so UI updates immediately on connect/reconnect
+            snap = bulk_stream_manager.get_snapshot(session.id)
+            if snap:
+                yield to_event({
+                    'stage': 'snapshot',
+                    'status': snap.get('status'),
+                    'progress': snap.get('progress'),
+                    'entries_count': len(snap.get('entries') or []),
+                })
+            if sub is not None:
+                for evt in sub:
+                    yield to_event(evt)
+        except (GeneratorExit, BrokenPipeError, ConnectionResetError, OSError):
+            # Client disconnected; stop streaming quietly
+            return
 
     resp = StreamingHttpResponse(proxy(), content_type='text/event-stream')
     resp['Cache-Control'] = 'no-cache'
     resp['X-Accel-Buffering'] = 'no'
     return resp
+
+@login_required
+@require_POST
+def bulk_research_delete(request, session_id: int):
+    try:
+        session = BulkResearchSession.objects.get(id=session_id, user=request.user)
+    except BulkResearchSession.DoesNotExist:
+        raise Http404("Session not found")
+
+    if session.status == 'ongoing':
+        return JsonResponse({'error': 'Cannot delete ongoing session'}, status=400)
+
+    session.delete()
+    return JsonResponse({'deleted': True})
 
 @login_required
 def bulk_research_result(request, session_id: int):
@@ -104,11 +122,13 @@ def bulk_research_result(request, session_id: int):
     except BulkResearchSession.DoesNotExist:
         raise Http404("Session not found")
 
-    # Prefer in-memory snapshot for live updates before final DB save
+    # Prefer live snapshot
     snap = bulk_stream_manager.get_snapshot(session_id)
     entries = []
+    used_snapshot = False
     if snap and isinstance(snap.get('entries'), list) and snap['entries']:
         entries = snap['entries']
+        used_snapshot = True
     else:
         raw = {}
         try:
@@ -485,10 +505,23 @@ def bulk_research_result(request, session_id: int):
             'shop': shop_result,
         })
 
+    # Persist simplified results so they’re available after reloads
+    try:
+        if simplified:
+            BulkResearchSession.objects.filter(id=session.id).update(
+                result_file=json.dumps({'entries': simplified})
+            )
+    except Exception:
+        pass
+
+    source = 'snapshot' if used_snapshot else ('db_result_file' if session.result_file else 'none')
     return JsonResponse({
         'session_id': session.id,
         'session_keyword': session.keyword,
+        'status': session.status,
         'started_at': session.created_at.isoformat(),
+        'source': source,
+        'entries_count': len(simplified),
         'entries': simplified
     })
 

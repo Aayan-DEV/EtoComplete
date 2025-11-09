@@ -7,7 +7,7 @@ from typing import Dict, Optional, Any, List
 import requests
 from django.conf import settings
 from django.utils import timezone
-
+from django.db import connection, close_old_connections
 from .models import BulkResearchSession
 
 # Upstream SSE URL; prefer settings if provided
@@ -50,6 +50,9 @@ class SessionWorker:
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._run, name=f"BulkSession-{self.session_id}", daemon=True)
+        # New: persistence throttling state
+        self._last_persist_ts = 0.0
+        self._last_persist_len = 0
 
     def start(self):
         if not self.thread.is_alive():
@@ -66,6 +69,21 @@ class SessionWorker:
             BulkResearchSession.objects.filter(id=self.session_id).update(
                 result_file=json.dumps({'entries': self.entries_snapshot})
             )
+        except Exception:
+            pass
+
+    def _persist_entries_throttled(self, min_interval_sec: float = 3.0, min_growth: int = 5):
+        try:
+            now = time.time()
+            cur_len = len(self.entries_snapshot)
+            if (cur_len == 0):
+                return
+            should_by_time = (now - self._last_persist_ts) >= min_interval_sec
+            grew_enough = (cur_len - self._last_persist_len) >= min_growth
+            if should_by_time or grew_enough:
+                self._persist_entries()
+                self._last_persist_ts = now
+                self._last_persist_len = cur_len
         except Exception:
             pass
 
@@ -99,7 +117,7 @@ class SessionWorker:
             self.progress[key] = obj
             self._persist_progress()
 
-        # Capture entries snapshot when upstream provides them
+        # Capture entries snapshot for both batch and single-item events
         try:
             entries = None
             if isinstance(evt.get('megafile'), dict) and isinstance(evt['megafile'].get('entries'), list):
@@ -107,9 +125,20 @@ class SessionWorker:
             elif isinstance(evt.get('entries'), list):
                 entries = evt['entries']
             if entries is not None:
-                # Keep in-memory for real-time result requests
                 self.entries_snapshot = entries
-                # Optionally persist as we go for durability; leave final save on completion
+                self._persist_entries_throttled()
+            else:
+                # Single-item variants
+                added = False
+                if isinstance(evt.get('entry'), dict):
+                    self.entries_snapshot.append(evt['entry']); added = True
+                elif isinstance(evt.get('item'), dict):
+                    self.entries_snapshot.append(evt['item']); added = True
+                elif isinstance(evt.get('popular_info'), dict) or isinstance(evt.get('popular'), dict):
+                    # Event itself resembles an entry; keep it for downstream mapping
+                    self.entries_snapshot.append(evt); added = True
+                if added:
+                    self._persist_entries_throttled()
         except Exception:
             pass
 
@@ -118,7 +147,6 @@ class SessionWorker:
             if all((self.progress.get(k, {}).get('remaining', 1) == 0) for k in ('search', 'splitting', 'demand', 'keywords')):
                 if self.status != 'completed':
                     self.status = 'completed'
-                    # Save final entries to DB
                     if self.entries_snapshot:
                         self._persist_entries()
                     self._mark_completed()
@@ -127,90 +155,112 @@ class SessionWorker:
             pass
 
     def _run(self):
-        try:
-            upstream = requests.post(
-                UPSTREAM_STREAM_URL,
-                json={
-                    'user_id': self.user_id,
-                    'keyword': self.keyword,
-                    'desired_total': self.desired_total
-                },
-                headers={
-                    'Accept': 'text/event-stream',
-                    'Content-Type': 'application/json'
-                },
-                stream=True,
-                timeout=120
-            )
-        except Exception as e:
-            with self.lock:
-                self.status = 'failed'
-                self._append_event({'stage': 'error', 'error': f'Upstream stream error: {e}'})
-                self._append_event({'stage': 'status', 'status': 'failed'})
-            return
+        attempts = 0
+        max_attempts = 5
+        backoffs = [1, 2, 5, 10, 15]
+        upstream = None
 
-        if not upstream.ok:
-            with self.lock:
-                self.status = 'failed'
-                self._append_event({'stage': 'error', 'error': f'Upstream stream failed ({upstream.status_code})', 'raw': upstream.text[:300]})
-                self._append_event({'stage': 'status', 'status': 'failed'})
+        while not self.stop_event.is_set():
             try:
-                upstream.close()
-            except Exception:
-                pass
-            return
+                upstream = requests.post(
+                    UPSTREAM_STREAM_URL,
+                    json={
+                        'user_id': self.user_id,
+                        'keyword': self.keyword,
+                        'desired_total': self.desired_total
+                    },
+                    headers={
+                        'Accept': 'text/event-stream',
+                        'Content-Type': 'application/json'
+                    },
+                    stream=True,
+                    timeout=(10, 120)  # connect, read
+                )
 
-        try:
-            for raw in upstream.iter_lines(decode_unicode=True):
-                if self.stop_event.is_set():
-                    break
-                if raw is None:
-                    continue
-                line = (raw or '').strip()
-                if not line:
-                    # keepalive for SSE
-                    continue
-                if line.startswith(':'):
-                    # comment
-                    continue
-                if line.startswith('data:'):
-                    payload = line[5:].strip()
-                    try:
-                        evt = json.loads(payload)
-                    except Exception:
-                        # Non-JSON payload; still forward
-                        evt = {'raw': payload}
+                if not upstream.ok:
                     with self.lock:
-                        self._update_from_event(evt)
-                        self._append_event(evt)
-                time.sleep(0.01)
-        finally:
-            try:
-                upstream.close()
-            except Exception:
-                pass
-            # If upstream ended but not marked completed, close out gracefully
-            with self.lock:
-                if self.status == 'ongoing':
-                    if all((self.progress.get(k, {}).get('remaining', 1) == 0) for k in ('search', 'splitting', 'demand', 'keywords')):
-                        self.status = 'completed'
+                        self.status = 'failed'
+                        self._append_event({'stage': 'error', 'error': f'Upstream stream failed ({upstream.status_code})', 'raw': upstream.text[:300]})
+                        self._append_event({'stage': 'status', 'status': 'failed'})
+                    return
+
+                for raw in upstream.iter_lines(decode_unicode=True):
+                    if self.stop_event.is_set():
+                        break
+                    if raw is None:
+                        continue
+                    line = (raw or '').strip()
+                    if not line or line.startswith(':'):
+                        continue
+                    if line.startswith('data:'):
+                        payload = line[5:].strip()
+                        try:
+                            evt = json.loads(payload)
+                        except Exception:
+                            evt = {'raw': payload}
+                        with self.lock:
+                            self._update_from_event(evt)
+                            self._append_event(evt)
+                    # Opportunistic persistence tick (in case events are sparse)
+                    self._persist_entries_throttled(min_interval_sec=5.0, min_growth=3)
+                    time.sleep(0.01)
+
+                # Normal end-of-stream: flush snapshot and exit
+                with self.lock:
+                    if self.entries_snapshot:
+                        self._persist_entries()
+                    self._append_event({
+                        'stage': 'snapshot',
+                        'status': self.status,
+                        'progress': self.progress,
+                        'entries_count': len(self.entries_snapshot)
+                    })
+                return
+
+            except ChunkedEncodingError as e:
+                attempts += 1
+                with self.lock:
+                    self._append_event({'stage': 'error', 'error': f'Chunked encoding ended prematurely: {e}', 'attempt': attempts})
+                if attempts >= max_attempts:
+                    with self.lock:
+                        self.status = 'failed'
                         if self.entries_snapshot:
                             self._persist_entries()
-                        self._mark_completed()
-                        self._append_event({'stage': 'status', 'status': 'completed'})
+                        self._append_event({'stage': 'status', 'status': 'failed'})
+                    return
+                time.sleep(backoffs[min(attempts - 1, len(backoffs) - 1)])
+                continue
 
-    def subscribe(self):
-        # Generator yielding SSE events from in-memory buffer
-        idx = 0
-        while not self.stop_event.is_set():
-            # Emit any new events
-            while idx < len(self.event_buffer):
-                evt = self.event_buffer[idx]
-                idx += 1
-                yield evt
-            # Lightweight idle
-            time.sleep(0.2)
+            except (ConnectionError, ReadTimeout) as e:
+                attempts += 1
+                with self.lock:
+                    self._append_event({'stage': 'error', 'error': f'Upstream connection error: {e}', 'attempt': attempts})
+                if attempts >= max_attempts:
+                    with self.lock:
+                        self.status = 'failed'
+                        if self.entries_snapshot:
+                            self._persist_entries()
+                        self._append_event({'stage': 'status', 'status': 'failed'})
+                    return
+                time.sleep(backoffs[min(attempts - 1, len(backoffs) - 1)])
+                continue
 
+            except Exception as e:
+                with self.lock:
+                    self.status = 'failed'
+                    self._append_event({'stage': 'error', 'error': f'Worker crashed: {e}'})
+                    self._append_event({'stage': 'status', 'status': 'failed'})
+                    if self.entries_snapshot:
+                        self._persist_entries()
+                return
+
+            finally:
+                try:
+                    if upstream is not None:
+                        upstream.close()
+                except Exception:
+                    pass
+                
     def snapshot(self) -> Dict[str, Any]:
         with self.lock:
             return {
@@ -218,6 +268,26 @@ class SessionWorker:
                 'progress': self.progress.copy(),
                 'entries': list(self.entries_snapshot),
             }
+
+    def subscribe(self):
+        # Generator yielding SSE events from in-memory buffer
+        idx = 0
+        last_emit = time.time()
+        heartbeat_interval = 15  # seconds
+        while not self.stop_event.is_set():
+            emitted = False
+            while idx < len(self.event_buffer):
+                evt = self.event_buffer[idx]
+                idx += 1
+                last_emit = time.time()
+                emitted = True
+                yield evt
+            # Lightweight idle
+            if not emitted and (time.time() - last_emit) >= heartbeat_interval:
+                last_emit = time.time()
+                # harmless heartbeat; ignored by UI mapStage
+                yield {'stage': 'heartbeat', 'ts': int(last_emit)}
+            time.sleep(0.2)
 
     def stop(self):
         self.stop_event.set()

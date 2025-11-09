@@ -78,24 +78,68 @@
   // SSE stream with auto-reconnect and snapshot hydration
   function attachStream(sessionId) {
     try { if (streams[sessionId]) { streams[sessionId].close(); } } catch (_) {}
-    var es = new EventSource(window.BULK_RESEARCH_STREAM_URL_BASE + sessionId + '/');
-    streams[sessionId] = es;
-    streamRetries[sessionId] = 0;
 
-    es.onopen = function () { streamRetries[sessionId] = 0; };
+    var url = window.BULK_RESEARCH_STREAM_URL_BASE + sessionId + '/';
+    var es;
+    try {
+      es = new EventSource(url);
+    } catch (e) {
+      alert('Stream failed to open: ' + (e && e.message ? e.message : String(e)) + '\nURL: ' + url);
+      return;
+    }
+    streams[sessionId] = es;
+
+    if (typeof streamRetries === 'object') {
+      streamRetries[sessionId] = 0;
+      es.onopen = function () { streamRetries[sessionId] = 0; };
+    }
 
     es.onmessage = function (ev) {
+      // Expect SSE 'data: {...}'
+      if (!ev || typeof ev.data !== 'string') {
+        console.warn('SSE message missing data string for session', sessionId, ev);
+        return;
+      }
+      var obj;
       try {
-        var data = JSON.parse(ev.data);
-        handleStreamUpdate(sessionId, data);
-      } catch (_) {}
+        obj = JSON.parse(ev.data);
+      } catch (e) {
+        console.warn('SSE non-JSON line for session', sessionId, ev.data);
+        return;
+      }
+      try {
+        handleStreamUpdate(sessionId, obj);
+      } catch (e) {
+        alert('Stream update handling failed: ' + e.message);
+        console.error('Stream update error', e, obj);
+      }
     };
 
     es.onerror = function () {
-      scheduleReconnect(sessionId);
+      var attempt = (streamRetries && streamRetries[sessionId]) || 0;
+      console.warn('SSE error on session', sessionId, '— reconnecting (attempt', attempt + 1, ')');
+      if (typeof scheduleReconnect === 'function') {
+        try { scheduleReconnect(sessionId); } catch (e) { console.error('scheduleReconnect failed', e); }
+      }
       try { es.close(); } catch (_) {}
     };
-  }
+}
+
+    // renderAggregatedFromCache: merge cached entries across sessions and render
+    function renderAggregatedFromCache() {
+        var ids = sessions.map(function (s) { return s && s.id; }).filter(Boolean);
+        var allEntries = [];
+        ids.forEach(function (id) {
+          var list = sessionResultsCache[id];
+          if (Array.isArray(list) && list.length) {
+            allEntries = allEntries.concat(list);
+          }
+        });
+        lastEntriesRaw = allEntries;
+        currentViewEntries = allEntries;
+        renderProductsGrid(applySorting(allEntries));
+        upsertResultsSelect();
+    }
 
   function scheduleReconnect(sessionId) {
     var s = findSession(sessionId);
@@ -112,64 +156,6 @@
         loadSessionResults(sessionId, true);
       }
     }, delay);
-  }
-
-  function handleStreamUpdate(sessionId, data) {
-    var s = findSession(sessionId);
-    if (!s) return;
-
-    // Snapshot carries full progress + entries_count (hydrates immediately)
-    if (data && typeof data.progress === 'object') {
-      s.progress = Object.assign({}, s.progress || {}, data.progress);
-      updateSession(s);
-    }
-    if (typeof data.entries_count === 'number') {
-      sessionCounts[sessionId] = data.entries_count;
-      upsertResultsSelect();
-    }
-
-    // Apply status field directly when present
-    if (typeof data.status === 'string') {
-      s.status = data.status;
-      updateSession(s);
-    }
-
-    var stage = (data.stage || '').toLowerCase();
-    var key = mapStage(stage);
-    if (key) {
-      s.progress = s.progress || {};
-      s.progress[key] = s.progress[key] || { total: 0, remaining: 0 };
-      if (typeof data.total === 'number') s.progress[key].total = data.total;
-      if (typeof data.remaining === 'number') s.progress[key].remaining = data.remaining;
-      updateSession(s);
-    }
-
-    if (stage === 'completed') {
-      s.status = 'completed';
-      updateSession(s);
-    } else if (stage === 'error') {
-      s.status = 'failed';
-      updateSession(s);
-    }
-
-    // Update counts and results when entries arrive
-    if (data.entries || (data.megafile && data.megafile.entries)) {
-      var list = Array.isArray(data.entries)
-        ? data.entries
-        : (data.megafile && Array.isArray(data.megafile.entries) ? data.megafile.entries : []);
-      if (list && list.length >= 0) {
-        sessionResultsCache[sessionId] = list;
-        sessionCounts[sessionId] = list.length;
-        upsertResultsSelect();
-        var selected = resultsSelect && resultsSelect.value;
-        if (selected === '__all__') {
-          loadAllSessionsResults();
-        } else if (String(selected) === String(sessionId)) {
-          lastEntriesRaw = list;
-          renderProductsGrid(applySorting(list));
-        }
-      }
-    }
   }
 
   // Polling fallback: merge status/progress from backend every 2s
@@ -222,29 +208,30 @@
   // Keep listening when switching session
   if (resultsSelect) {
     resultsSelect.addEventListener('change', function () {
-      var val = resultsSelect.value;
-      productsGrid.innerHTML = '';
-      if (resultsBack) resultsBack.classList.add('hidden');
-      if (allSessionsController) { try { allSessionsController.abort(); } catch (_) {} allSessionsController = null; }
+        var val = resultsSelect.value;
+        productsGrid.innerHTML = '';
+        if (resultsBack) resultsBack.classList.add('hidden');
+        if (allSessionsController) { try { allSessionsController.abort(); } catch (_) {} allSessionsController = null; }
 
-      if (!val) {
-        resultsTitle.textContent = 'No session selected';
-        sessionStorage.removeItem(SELECT_STORAGE_KEY);
-        renderEmptyPrompt();
-        return;
-      }
-      sessionStorage.setItem(SELECT_STORAGE_KEY, val);
-      if (val === '__all__') {
-        resultsTitle.textContent = 'All Sessions — aggregated';
-        loadAllSessionsResults();
-      } else {
-        var s = findSession(val);
-        updateResultsTitleForSession(s);
-        attachStream(val);
-        loadSessionResults(val, true);
-      }
+        if (!val) {
+            showLoading(false);
+            resultsTitle.textContent = 'No session selected';
+            sessionStorage.removeItem(SELECT_STORAGE_KEY);
+            renderEmptyPrompt();
+            return;
+        }
+        sessionStorage.setItem(SELECT_STORAGE_KEY, val);
+        if (val === '__all__') {
+            resultsTitle.textContent = 'All Sessions — aggregated';
+            loadAllSessionsResults();
+        } else {
+            var s = findSession(val);
+            updateResultsTitleForSession(s);
+            attachStream(val);
+            loadSessionResults(val, true);
+        }
     });
-  }
+}
 
     // Generalized metric accessor (now supports Demand).
   function metricValueOf(entry, metric) {
@@ -324,13 +311,58 @@
       return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c];
     });
   }
-  function fmtDateISO(iso) {
-    try { return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); } catch (_) { return iso || ''; }
+function fmtDateISO(iso) {
+  try { return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); } catch (_) { return iso || ''; }
+}
+// Centered loading icon (black & white, theme-aware)
+var __resultsLoadingFlag = false;
+var __centerLoadingWrap = null;
+var __centerLoadingIcon = null;
+
+function showLoading(on, _label) {
+  __resultsLoadingFlag = !!on;
+  if (resultsLoading) resultsLoading.classList.toggle('hidden', !on);
+  toggleCenterLoading(on);
+}
+
+function toggleCenterLoading(on) {
+  if (on) {
+    ensureCenterLoading();
+    __centerLoadingWrap.classList.remove('hidden');
+  } else {
+    if (__centerLoadingWrap) __centerLoadingWrap.classList.add('hidden');
   }
-  function showLoading(on) {
-    if (!resultsLoading) return;
-    resultsLoading.classList.toggle('hidden', !on);
-  }
+}
+
+function ensureCenterLoading() {
+  if (__centerLoadingWrap) return;
+
+  var panel = document.getElementById('results-panel') || document.body;
+
+  __centerLoadingWrap = document.createElement('div');
+  __centerLoadingWrap.id = 'results-centered-loading';
+  __centerLoadingWrap.className = 'col-span-full w-full min-h-[40vh] grid place-items-center';
+
+  __centerLoadingIcon = document.createElement('div');
+  __centerLoadingIcon.className = 'loading-icon';
+  // Make it slightly larger/thicker while staying neutral (uses CSS vars)
+  __centerLoadingIcon.style.width = '28px';
+  __centerLoadingIcon.style.height = '28px';
+  __centerLoadingIcon.style.borderWidth = '3px';
+  __centerLoadingIcon.style.borderColor = 'var(--border)';
+  __centerLoadingIcon.style.borderTopColor = 'var(--text)';
+
+  __centerLoadingWrap.appendChild(__centerLoadingIcon);
+
+  // Insert right above the products grid to center within the panel
+  var products = document.getElementById('products-grid');
+  if (panel && products) panel.insertBefore(__centerLoadingWrap, products);
+  else document.body.appendChild(__centerLoadingWrap);
+
+  // Start hidden until toggled on
+  __centerLoadingWrap.classList.add('hidden');
+}
+
   function clampInt(val, min, max) {
     var n = parseInt(String(val || '0'), 10);
     if (isNaN(n)) n = min;
@@ -456,40 +488,95 @@ window.addEventListener('keydown', function (e) {
     });
   }
 
+  function deleteSession(sessionId) {
+  var btn = document.querySelector('.delete-session[data-delete="' + sessionId + '"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Deleting...'; }
+
+  return fetch(window.BULK_RESEARCH_DELETE_URL_BASE + sessionId + '/', {
+    method: 'POST',
+    headers: Object.assign({ 'Accept': 'application/json' }, csrfHeader()),
+    credentials: 'same-origin'
+  }).then(function (r) {
+    return r.json().catch(function () { return {}; }).then(function (body) {
+      if (!r.ok) {
+        var msg = (body && (body.error && (body.error.message || body.error) || body.raw)) || ('Delete failed (' + r.status + ')');
+        if (typeof msg !== 'string') { try { msg = JSON.stringify(msg); } catch (_) { msg = 'Delete failed (' + r.status + ')'; } }
+        throw new Error(msg);
+      }
+      return body;
+    });
+  }).then(function () {
+    // Close any active stream for this session
+    try { if (streams[sessionId]) { streams[sessionId].close(); } } catch (_) {}
+    delete streams[sessionId];
+
+    // Drop caches and counts
+    delete sessionResultsCache[sessionId];
+    delete sessionCounts[sessionId];
+
+    // Remove from in-memory list
+    sessions = sessions.filter(function (x) { return String(x.id) !== String(sessionId); });
+
+    // If currently viewing this session, clear selection and grid
+    if (resultsSelect && String(resultsSelect.value) === String(sessionId)) {
+      resultsSelect.value = '';
+      if (resultsBack) resultsBack.classList.add('hidden');
+      resultsTitle.textContent = 'No session selected';
+      productsGrid.innerHTML = '';
+    } else if (resultsSelect && resultsSelect.value === '__all__') {
+      // Keep aggregated view current
+      loadAllSessionsResults();
+    } else {
+      upsertResultsSelect();
+    }
+
+    // Re-render sessions list
+    renderSessionsList();
+
+    // Success toast
+    showToast('Session deleted.', 'success');
+  }).catch(function (err) {
+    // Error toast instead of alert
+    showToast('Delete failed: ' + err.message, 'error');
+  }).finally(function () {
+    if (btn) { btn.textContent = 'Delete'; btn.disabled = false; }
+  });
+}
+
   // Create session
   function createSession(keyword, desiredTotal) {
     return fetch(window.BULK_RESEARCH_START_URL, {
-      method: 'POST',
-      headers: Object.assign({ 'Content-Type': 'application/json', 'Accept': 'application/json' }, csrfHeader()),
-      credentials: 'same-origin',
-      body: JSON.stringify({ keyword: keyword, desired_total: desiredTotal })
-    }).then(function (r) {
-      return r.json().catch(function () { return {}; }).then(function (body) {
-        if (!r.ok) {
-          var msg = (body && (body.error && (body.error.message || body.error) || body.raw)) || ('Start failed (' + r.status + ')');
-          if (typeof msg !== 'string') { try { msg = JSON.stringify(msg); } catch (_) { msg = 'Start failed (' + r.status + ')'; } }
-          throw new Error(msg);
-        }
-        return body;
-      });
-    }).then(function (out) {
-      closeWizard();
-      var s = {
-        id: out.session_id, keyword: keyword, desired_total: desiredTotal,
-        status: 'ongoing',
-        progress: {
-          search: { total: desiredTotal, remaining: desiredTotal },
-          splitting: { total: desiredTotal, remaining: desiredTotal },
-          demand: { total: desiredTotal, remaining: desiredTotal },
-          keywords: { total: desiredTotal, remaining: desiredTotal }
-        },
-        created_at: new Date().toISOString()
-      };
-      sessions.unshift(s);
-      renderSessionsList();
-      upsertResultsSelect();
-      attachStream(s.id);
-    }).catch(function (err) { alert('Failed to start: ' + err.message); });
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json', 'Accept': 'application/json' }, csrfHeader()),
+    credentials: 'same-origin',
+    body: JSON.stringify({ keyword: keyword, desired_total: desiredTotal })
+  }).then(function (r) {
+    return r.json().catch(function () { return {}; }).then(function (body) {
+      if (!r.ok) {
+        var msg = (body && (body.error && (body.error.message || body.error) || body.raw)) || ('Start failed (' + r.status + ')');
+        if (typeof msg !== 'string') { try { msg = JSON.stringify(msg); } catch (_) { msg = 'Start failed (' + r.status + ')'; } }
+        throw new Error(msg);
+      }
+      return body;
+    });
+  }).then(function (out) {
+    closeWizard();
+    var s = {
+      id: out.session_id, keyword: keyword, desired_total: desiredTotal,
+      status: 'ongoing',
+      progress: {
+        search:    { total: desiredTotal, remaining: desiredTotal },
+        splitting: { total: desiredTotal, remaining: desiredTotal },
+        demand:    { total: desiredTotal, remaining: desiredTotal },
+        keywords:  { total: desiredTotal, remaining: desiredTotal }
+      },
+      created_at: new Date().toISOString()
+    };
+    sessions.unshift(s);
+    renderSessionsList();
+    upsertResultsSelect();
+    attachStream(s.id);
+  }).catch(function (err) { alert('Failed to start: ' + err.message); });
   }
 
   // Render sessions list in panel
@@ -523,6 +610,7 @@ window.addEventListener('keydown', function (e) {
         '<div class="row-status">Status: <span class="status-tag ' + s.status + '">' + s.status + '</span></div>' +
         '<div class="row-actions">' +
         '  <button class="link-btn view-results" data-view="' + s.id + '">View Results</button>' +
+        '  <button class="link-btn delete-session ml-2" data-delete="' + s.id + '">Delete</button>' +
         '</div>';
 
       var btn = item.querySelector('.view-results');
@@ -535,6 +623,25 @@ window.addEventListener('keydown', function (e) {
           loadSessionResults(s.id, true);
         });
       }
+
+      var delBtn = item.querySelector('.delete-session');
+  if (delBtn) {
+    // Make delete unclickable for ongoing sessions
+    if (String(s.status) === 'ongoing') {
+      delBtn.disabled = true;
+      delBtn.title = 'Cannot delete while session is ongoing';
+      delBtn.setAttribute('aria-disabled', 'true');
+    }
+    delBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (delBtn.disabled) return;
+      showConfirmDelete(s).then(function (confirmed) {
+        if (!confirmed) return;
+        deleteSession(s.id);
+      });
+    });
+  }
+
       sessionsList.appendChild(item);
     });
   }
@@ -556,61 +663,70 @@ window.addEventListener('keydown', function (e) {
            '<span class="sep">/</span><span class="total">' + total + '</span></span></div>';
   }
 
-  // SSE stream
-  function attachStream(sessionId) {
-    try { if (streams[sessionId]) { streams[sessionId].close(); } } catch (_) {}
-    var es = new EventSource(window.BULK_RESEARCH_STREAM_URL_BASE + sessionId + '/');
-    streams[sessionId] = es;
-
-    es.onmessage = function (ev) {
-      try {
-        var data = JSON.parse(ev.data);
-        handleStreamUpdate(sessionId, data);
-      } catch (_) { /* ignore non-JSON lines */ }
-    };
-    es.onerror = function () {
-      var s = findSession(sessionId);
-      if (s && s.status !== 'failed') {
-        s.status = 'completed';
-        updateSession(s);
-        var selected = resultsSelect.value;
-        if (String(sessionId) === String(selected) || selected === '__all__') {
-          loadSessionResults(sessionId, selected !== '__all__');
-        }
-      }
-      try { es.close(); } catch (_) {}
-    };
-  }
-
   function handleStreamUpdate(sessionId, data) {
-    var s = findSession(sessionId);
-    if (!s) return;
-    var stage = (data.stage || '').toLowerCase();
-    var key = mapStage(stage);
-    if (key) {
-      s.progress = s.progress || {};
-      s.progress[key] = s.progress[key] || { total: 0, remaining: 0 };
-      if (typeof data.total === 'number') s.progress[key].total = data.total;
-      if (typeof data.remaining === 'number') s.progress[key].remaining = data.remaining;
+  var s = findSession(sessionId);
+  if (!s) {
+    console.warn('Stream update for unknown session', sessionId, data);
+    return;
+  }
+  var stage = String(data.stage || '').toLowerCase();
+
+  // Hydrate from snapshot: sets progress, status, and triggers results fetch
+  if (stage === 'snapshot') {
+    if (typeof data.status === 'string') s.status = data.status;
+    if (data.progress && typeof data.progress === 'object') {
+      s.progress = data.progress;
       updateSession(s);
     }
+    var ec = data.entries_count;
+    if (typeof ec === 'number' && isFinite(ec)) {
+      sessionCounts[sessionId] = ec;
+      upsertResultsSelect();
+      var selected = resultsSelect && resultsSelect.value;
+      if (ec > 0 && (String(selected) === String(sessionId) || selected === '__all__')) {
+        // Fetch now so products render immediately
+        try { loadSessionResults(sessionId, selected !== '__all__'); } catch (e) { alert('Snapshot-triggered load failed: ' + e.message); }
+      } else if (ec === 0) {
+        console.info('Snapshot indicates 0 products yet for session', sessionId, '— upstream may still be processing.');
+      }
+    } else {
+      console.warn('Snapshot missing/invalid entries_count for session', sessionId, data);
+    }
+    return;
+  }
 
-    // If stream supplies entries/megafile, fetch and render results
-    if (data.entries || (data.megafile && data.megafile.entries)) {
-      var isAggregated = (resultsSelect && resultsSelect.value === '__all__');
+  // Progress stage updates
+  var key = mapStage(stage);
+  if (key) {
+    s.progress = s.progress || {};
+    s.progress[key] = s.progress[key] || { total: 0, remaining: 0 };
+    if (typeof data.total === 'number' && isFinite(data.total)) s.progress[key].total = data.total;
+    if (typeof data.remaining === 'number' && isFinite(data.remaining)) s.progress[key].remaining = data.remaining;
+    updateSession(s);
+  }
+
+  // If stream mentions entries/megafile, refresh results
+  var hasEntriesFlag = (Array.isArray(data.entries) && data.entries.length > 0) ||
+                       (data.megafile && Array.isArray(data.megafile.entries) && data.megafile.entries.length > 0);
+  if (hasEntriesFlag) {
+    var isAggregated = (resultsSelect && resultsSelect.value === '__all__');
+    try {
       if (isAggregated) {
-        // Keep aggregated view current
         loadAllSessionsResults();
       } else {
         loadSessionResults(sessionId, String(resultsSelect.value) === String(sessionId));
       }
-    }
-
-    if (stage === 'completed') {
-      s.status = 'completed';
-      updateSession(s);
+    } catch (e) {
+      alert('Stream-triggered results refresh failed: ' + e.message);
+      console.error('Refresh error', e, data);
     }
   }
+
+  if (stage === 'completed') {
+    s.status = 'completed';
+    updateSession(s);
+  }
+}
   function mapStage(stage) {
     if (stage === 'search') return 'search';
     if (stage === 'splitting') return 'splitting';
@@ -695,6 +811,123 @@ window.addEventListener('keydown', function (e) {
     });
   }
 
+  function showToast(message, type) {
+  var container = document.getElementById('toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'toast-container';
+    container.className = 'fixed bottom-4 right-4 z-[100] flex flex-col items-end space-y-2 pointer-events-none';
+    document.body.appendChild(container);
+  }
+
+  var base =
+    'pointer-events-auto max-w-sm w-full rounded-lg shadow-xl ' +
+    'px-4 py-3 text-sm ring-1 transition transform ' +
+    'opacity-0 translate-y-2';
+
+  var cls;
+  if (type === 'success') {
+    cls = 'bg-emerald-600 text-white ring-emerald-500/20';
+  } else if (type === 'error') {
+    cls = 'bg-red-600 text-white ring-red-500/20';
+  } else {
+    cls = 'bg-gray-900 text-white dark:bg-gray-800 ring-white/10';
+  }
+
+  var toast = document.createElement('div');
+  toast.className = base + ' ' + cls;
+
+  var closeBtn =
+    '<button class="ml-3 shrink-0 rounded-md bg-white/10 hover:bg-white/20 px-2 py-1 text-white" aria-label="Close">✕</button>';
+
+  toast.innerHTML =
+    '<div class="flex items-center justify-between">' +
+    '  <div class="pr-2">' + message + '</div>' +
+    '  ' + closeBtn +
+    '</div>';
+
+  container.appendChild(toast);
+
+  // Animate in
+  requestAnimationFrame(function () {
+    toast.classList.remove('opacity-0', 'translate-y-2');
+    toast.classList.add('opacity-100', 'translate-y-0');
+    toast.style.transitionDuration = '200ms';
+  });
+
+  var remove = function () {
+    toast.classList.remove('opacity-100', 'translate-y-0');
+    toast.classList.add('opacity-0', 'translate-y-2');
+    setTimeout(function () {
+      if (toast && toast.parentNode) toast.parentNode.removeChild(toast);
+    }, 180);
+  };
+
+  var btn = toast.querySelector('button');
+  if (btn) btn.addEventListener('click', remove);
+
+  setTimeout(remove, 3500);
+}
+
+function showConfirmDelete(session) {
+  return new Promise(function (resolve) {
+    var overlay = document.createElement('div');
+    overlay.className =
+      'fixed inset-0 z-[100] flex items-center justify-center ' +
+      'bg-black/40 dark:bg-black/60 backdrop-blur-sm';
+
+    var modal = document.createElement('div');
+    modal.className =
+      'w-full max-w-md rounded-xl shadow-2xl ring-1 ring-black/10 dark:ring-white/10 ' +
+      'bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100';
+
+    modal.innerHTML =
+      '<div class="p-6">' +
+      '  <h2 class="text-lg font-semibold">Delete Session</h2>' +
+      '  <p class="mt-2 text-sm text-gray-600 dark:text-gray-300">' +
+      '    Are you sure you want to delete ' +
+      '    <span class="font-medium">&ldquo;' + (session.keyword ? String(session.keyword) : 'this session') + '&rdquo;</span>? ' +
+      '    This action cannot be undone.' +
+      '  </p>' +
+      '  <div class="mt-6 flex items-center justify-end gap-3">' +
+      '    <button type="button" class="px-4 py-2 rounded-md ' +
+      '      bg-gray-100 text-gray-800 hover:bg-gray-200 ' +
+      '      dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 ' +
+      '      ring-1 ring-gray-200 dark:ring-gray-700">Cancel</button>' +
+      '    <button type="button" class="px-4 py-2 rounded-md ' +
+      '      bg-red-600 text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500">Delete</button>' +
+      '  </div>' +
+      '</div>';
+
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    var btns = modal.querySelectorAll('button');
+    var cancelBtn = btns[0];
+    var delBtn = btns[1];
+
+    var close = function (value) {
+      if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      resolve(value);
+    };
+
+    cancelBtn.addEventListener('click', function () { close(false); });
+    delBtn.addEventListener('click', function () { close(true); });
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay) close(false);
+    });
+    document.addEventListener('keydown', function onEsc(e) {
+      if (e.key === 'Escape') {
+        document.removeEventListener('keydown', onEsc);
+        close(false);
+      }
+    });
+
+    // Focus primary action
+    setTimeout(function () { try { delBtn.focus(); } catch (_) {} }, 10);
+  });
+}
+
   function updateResultsTitleForSession(s) {
     if (!s) { resultsTitle.textContent = 'Session'; return; }
     var created = fmtDateISO(s.created_at);
@@ -702,89 +935,156 @@ window.addEventListener('keydown', function (e) {
   }
 
   function loadSessionResults(sessionId, renderNow) {
-  showLoading(true);
-  fetch(window.BULK_RESEARCH_RESULT_URL_BASE + sessionId + '/', { credentials: 'same-origin' })
-  .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { if (!r.ok) throw new Error(j && (j.error || j.raw || ('Failed (' + r.status + ')'))); return j; }); })
-  .then(function (json) {
-      var list = Array.isArray(json.entries) ? json.entries : [];
-      sessionResultsCache[sessionId] = list;
-      sessionCounts[sessionId] = list.length;
-      upsertResultsSelect();
-      lastEntriesRaw = list;
-      if (renderNow) { renderProductsGrid(applySorting(list)); }
-    })
-    .catch(function (err) {
-      alert('Failed to load results: ' + err.message);
-    })
-    .finally(function () { showLoading(false); restoreScroll(); });
+  showLoading(true, 'Loading products…');
+
+  var url = window.BULK_RESEARCH_RESULT_URL_BASE + sessionId + '/';
+    return fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+      .then(function (r) {
+        var isJson = ((r.headers.get('Content-Type') || '').toLowerCase().indexOf('application/json') !== -1);
+        return r.text().then(function (txt) {
+          var body;
+          try { body = isJson ? JSON.parse(txt || '{}') : {}; } catch (e) { body = { parse_error: e.message, raw: (txt || '').slice(0, 500) }; }
+          if (!r.ok) {
+            var msg = 'Results request failed (' + r.status + '). ' +
+                      'URL: ' + url + '. ' +
+                      (body && body.error ? ('Error: ' + (body.error.message || body.error)) : 'No error message from server.');
+            throw new Error(msg);
+          }
+          return body;
+        });
+      })
+      .then(function (json) {
+        console.debug('Result JSON for session', sessionId, {
+          url: url,
+          status: json && json.status,
+          source: json && json.source,
+          keys: Object.keys(json || {}),
+          entriesType: (json && json.entries != null) ? Object.prototype.toString.call(json.entries) : 'undefined',
+          entries_count: json && json.entries_count,
+          length_inferred: Array.isArray(json && json.entries) ? json.entries.length : 0
+        });
+
+        var entries = [];
+        if (Array.isArray(json.entries)) {
+          entries = json.entries;
+        } else if (json.megafile && Array.isArray(json.megafile.entries)) {
+          entries = json.megafile.entries;
+        } else {
+          var keys = Object.keys(json || {});
+          var type = (json && json.entries != null) ? (Object.prototype.toString.call(json.entries)) : 'undefined';
+          alert('Invalid result shape for session ' + sessionId +
+                '. Expected "entries" array; got ' + type +
+                '. Keys: ' + keys.join(', '));
+          console.error('Bad result JSON', json);
+          entries = [];
+        }
+
+        if ((json && json.source === 'none') && (json && json.status === 'ongoing') && entries.length === 0) {
+          console.info('Session', sessionId, 'still streaming; no snapshot or DB result yet.');
+        }
+
+        sessionResultsCache[sessionId] = entries;
+        sessionCounts[sessionId] = entries.length;
+        upsertResultsSelect();
+        lastEntriesRaw = entries;
+
+        if (entries.length === 0) {
+          console.info('Results loaded, but no products yet for session', sessionId,
+                       '— upstream may still be processing or entries not emitted as an array.');
+        }
+
+        if (renderNow) {
+          try { renderProductsGrid(applySorting(entries)); }
+          catch (e) {
+            alert('Rendering products failed: ' + e.message);
+            console.error('Rendering error', e, entries);
+          }
+        }
+      })
+      .catch(function (err) {
+        alert('Failed to load results: ' + err.message);
+        console.error('Results load failed for session', sessionId, err);
+      })
+      .finally(function () { showLoading(false); restoreScroll(); });
 }
 
   function loadAllSessionsResults() {
-    showLoading(true);
+  showLoading(true, 'Loading all sessions…');
 
-    // Abort any previous aggregated request
-    if (allSessionsController) {
-      try { allSessionsController.abort(); } catch (_) {}
-    }
-    allSessionsController = new AbortController();
-    var signal = allSessionsController.signal;
+  // Abort any previous aggregated request
+  if (allSessionsController) {
+    try { allSessionsController.abort(); } catch (_) {}
+  }
+  allSessionsController = new AbortController();
+  var signal = allSessionsController.signal;
 
-    var ids = sessions.map(function (s) { return s && s.id; }).filter(Boolean);
-    if (ids.length === 0) {
-      lastEntriesRaw = [];
-      currentViewEntries = [];
-      renderProductsGrid([]);
-      upsertResultsSelect();
-      showLoading(false);
+  var ids = sessions.map(function (s) { return s && s.id; }).filter(Boolean);
+  if (ids.length === 0) {
+    lastEntriesRaw = [];
+    currentViewEntries = [];
+    renderProductsGrid([]);
+    upsertResultsSelect();
+    showLoading(false);
+    return;
+  }
+
+  // Render immediately from whatever cache we have
+  try { renderAggregatedFromCache(); } catch (e) { console.error('Render aggregated from cache failed', e); }
+
+  // Fetch any sessions missing cache and progressively update the grid
+  var remaining = 0;
+  ids.forEach(function (id) {
+    if (Array.isArray(sessionResultsCache[id])) {
+      sessionCounts[id] = sessionResultsCache[id].length;
       return;
     }
+    remaining += 1;
 
-    var fetches = ids.map(function (id) {
-      // Use cache if available
-      if (sessionResultsCache[id]) {
-        sessionCounts[id] = sessionResultsCache[id].length;
-        return Promise.resolve(sessionResultsCache[id]);
-      }
-      // Fetch per session (swallow errors so one bad session doesn't block others)
-      return fetch(window.BULK_RESEARCH_RESULT_URL_BASE + id + '/', { credentials: 'same-origin', signal: signal })
-        .then(function (r) {
-          return r.json().catch(function () { return {}; }).then(function (j) {
-            if (!r.ok) throw new Error(j && (j.error || j.raw || ('Failed (' + r.status + ')')));
-            return Array.isArray(j.entries) ? j.entries : [];
-          });
-        })
-        .catch(function () { return []; })
-        .then(function (list) {
-          sessionResultsCache[id] = list;
-          sessionCounts[id] = list.length;
-          return list;
+    var url = window.BULK_RESEARCH_RESULT_URL_BASE + id + '/';
+    fetch(url, { credentials: 'same-origin', signal: signal, headers: { 'Accept': 'application/json' } })
+      .then(function (r) {
+        var isJson = ((r.headers.get('Content-Type') || '').toLowerCase().indexOf('application/json') !== -1);
+        return r.text().then(function (txt) {
+          var body;
+          try { body = isJson ? JSON.parse(txt || '{}') : {}; } catch (e) { body = { parse_error: e.message, raw: (txt || '').slice(0, 500) }; }
+          if (!r.ok) {
+            var msg = 'Aggregated results request failed (' + r.status + ') for session ' + id + '. ' +
+                      'URL: ' + url + '. ' +
+                      (body && body.error ? ('Error: ' + (body.error.message || body.error)) : 'No error message from server.');
+            throw new Error(msg);
+          }
+          return Array.isArray(body.entries) ? body.entries
+               : (body.megafile && Array.isArray(body.megafile.entries) ? body.megafile.entries : []);
         });
-    });
-
-    Promise.all(fetches)
-      .then(function (lists) {
-        var allEntries = [];
-        for (var i = 0; i < lists.length; i++) {
-          allEntries = allEntries.concat(lists[i]);
-        }
-        lastEntriesRaw = allEntries;
-        currentViewEntries = allEntries;
-        renderProductsGrid(applySorting(allEntries));
-        upsertResultsSelect();
+      })
+      .catch(function (err) {
+        console.warn('Aggregated: failed to fetch session', id, err);
+        return [];
+      })
+      .then(function (entries) {
+        sessionResultsCache[id] = entries;
+        sessionCounts[id] = entries.length;
+        try { renderAggregatedFromCache(); } catch (e) { console.error('Re-render aggregated failed', e); }
       })
       .finally(function () {
-        showLoading(false);
+        remaining -= 1;
+        if (remaining <= 0) { showLoading(false); }
       });
-  }
+  });
+
+  if (remaining === 0) { showLoading(false); }
+}
 
   function renderProductsGrid(entries) {
   productsGrid.innerHTML = '';
   if (!entries || entries.length === 0) {
-      var empty = document.createElement('div');
-      empty.className = 'text-[var(--muted)] text-sm';
-      empty.textContent = 'No products yet.';
-      productsGrid.appendChild(empty);
-      return;
+    // While loading, suppress the empty-state message
+    if (__resultsLoadingFlag) return;
+    var empty = document.createElement('div');
+    empty.className = 'text-[var(--muted)] text-sm';
+    empty.textContent = 'No products yet.';
+    productsGrid.appendChild(empty);
+    return;
   }
   entries.forEach(function (entry) {
       var title = entry && entry.title || '';
