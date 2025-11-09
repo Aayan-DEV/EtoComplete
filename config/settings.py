@@ -13,14 +13,16 @@ load_dotenv(BASE_DIR / ".env", override=True)
 SECRET_KEY = os.getenv("SECRET_KEY")
 DEBUG = os.getenv("DEBUG", "True").lower() == "true"
 
+# Hosts: allow localhost, Railway, and ngrok subdomains
 ALLOWED_HOSTS = [h.strip() for h in os.getenv(
     "ALLOWED_HOSTS",
-    "127.0.0.1,localhost,*.railway.app,etocomplete-production.up.railway.app"
+    "127.0.0.1,localhost,etocomplete-production.up.railway.app,.railway.app,.ngrok-free.app"
 ).split(",") if h.strip()]
 
+# CSRF trusted origins must be full origins (scheme://host)
 CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.getenv(
     "CSRF_TRUSTED_ORIGINS",
-    "http://127.0.0.1:8000,http://localhost:8000,https://*.railway.app,https://etocomplete-production.up.railway.app"
+    "http://127.0.0.1:8000,http://localhost:8000,https://etocomplete-production.up.railway.app,https://*.railway.app,https://knowing-quail-helped.ngrok-free.app"
 ).split(",") if o.strip()]
 
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
