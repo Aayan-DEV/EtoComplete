@@ -10,7 +10,7 @@ from django.utils.safestring import mark_safe
 from django.contrib.auth.decorators import login_required
 import re
 import json
-
+from django.views.decorators.csrf import ensure_csrf_cookie
 from .supabase_client import ping_supabase, sign_up_user, oauth_authorize_url, resend_signup_confirmation
 from .models import UserProfile
 from django.contrib.auth import authenticate, login, logout, update_session_auth_hash
@@ -28,7 +28,7 @@ def home(request):
         return redirect('users_main_dash')
     return render(request, 'landing/landing.html')
 
-
+@ensure_csrf_cookie
 def signup(request):
     if request.method == 'GET':
         return render(request, 'auth/user_auth/signup/signup.html')
@@ -63,7 +63,8 @@ def signup(request):
     else:
         messages.error(request, f"Signup completed locally. Supabase email failed (status {sb.get('status')}).")
     return redirect('signup')
-    
+
+@ensure_csrf_cookie
 def login_view(request):
     if request.method == 'GET':
         return render(request, 'auth/user_auth/login/login.html')

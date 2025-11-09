@@ -25,6 +25,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://etocomplete-production.up.railway.app",
     "https://*.railway.app",
     "https://knowing-quail-helped.ngrok-free.app",
+    "https://*.ngrok-free.app",
 ]
 
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
@@ -77,9 +78,8 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-DB_USE_SQLITE = True
 
-if DATABASE_URL and not DB_USE_SQLITE:
+if DATABASE_URL:
     DATABASES = {
         "default": dj_database_url.parse(
             DATABASE_URL,
