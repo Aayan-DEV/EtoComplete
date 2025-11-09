@@ -9,6 +9,7 @@ from django.conf import settings
 from django.utils import timezone
 from django.db import connection, close_old_connections
 from .models import BulkResearchSession
+from requests.exceptions import ChunkedEncodingError, ConnectionError, ReadTimeout
 
 # Upstream SSE URL; prefer settings if provided
 UPSTREAM_STREAM_URL = getattr(settings, 'UPSTREAM_STREAM_URL', "http://136.116.10.105:8001/run/stream")
@@ -161,6 +162,12 @@ class SessionWorker:
         upstream = None
 
         while not self.stop_event.is_set():
+            # Ensure this worker has a fresh DB connection
+            try:
+                close_old_connections()
+            except Exception:
+                pass
+
             try:
                 upstream = requests.post(
                     UPSTREAM_STREAM_URL,
@@ -260,7 +267,7 @@ class SessionWorker:
                         upstream.close()
                 except Exception:
                     pass
-                
+
     def snapshot(self) -> Dict[str, Any]:
         with self.lock:
             return {
