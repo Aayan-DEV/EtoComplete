@@ -1,0 +1,246 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-black">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Eto — Fast. Clear. Scalable.</title>
+
+    <!-- Tailwind CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['OpenSauce', 'ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', 'Noto Sans', 'sans-serif'],
+              display: ['Melodrame', 'OpenSauce', 'serif']
+            }
+          }
+        }
+      }
+    </script>
+
+    <link rel="stylesheet" href="{% static 'landing/landing.css' %}">
+  </head>
+  <body class="h-full text-white font-sans antialiased selection:bg-white selection:text-black">
+    <header class="fixed top-0 left-0 right-0 z-30 px-6 py-4 flex items-center justify-end">
+        <div class="flex items-center gap-3">
+            <a href="{% url 'login' %}" class="inline-flex items-center justify-center rounded-full px-4 py-2 text-sm font-medium ring-1 ring-white/30 hover:ring-white transition">Login</a>
+            <a href="{% url 'signup' %}" class="inline-flex items-center justify-center rounded-full px-4 py-2 text-sm font-medium bg-white text-black hover:bg-neutral-200 transition">Sign up</a>
+        </div>
+    </header>
+
+    <main class="h-screen overflow-y-auto snap-y snap-mandatory">
+      <!-- 1) Hero: full-screen centered -->
+      <section class="min-h-screen snap-start flex items-center justify-center px-6">
+        <div class="mx-auto max-w-5xl text-center reveal">
+          <div class="mb-6">
+            <span class="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ring-1 ring-white/20 text-white/80">
+              Now specialising in Etsy
+            </span>
+          </div>
+
+          <!-- Headline uses Melodrame for “1000x” -->
+          <div class="leading-none">
+            <span class="block font-display text-[clamp(3.5rem,12vw,9rem)] tracking-tight" data-parallax="hero-1000x">
+              1000x
+            </span>
+            <h1 class="mt-3 font-display text-4xl sm:text-5xl md:text-6xl tracking-tight">
+              your e commerce productivity
+            </h1>
+          </div>
+
+          <p class="mt-6 max-w-2xl mx-auto text-base sm:text-lg text-white/70">
+            Faster workflows. Clear decisions. Scale with confidence.
+          </p>
+
+          <div class="mt-12 flex items-center justify-center gap-2 text-xs text-white/50">
+            <span>Scroll</span>
+            <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path d="M10 14l-4-4h8l-4 4Z"/></svg>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2) Features: full-screen centered, bold with concise detail -->
+      <section id="features" class="min-h-screen snap-start flex items-center justify-center px-6">
+        <div class="mx-auto max-w-7xl w-full text-center">
+          <h2 class="reveal font-display text-2xl sm:text-3xl tracking-tight">Features</h2>
+
+          <div class="mt-10 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            <!-- Product Research -->
+            <article class="reveal rounded-2xl border border-white/10 bg-neutral-900 p-8 text-left">
+              <h3 class="font-display text-3xl md:text-4xl tracking-tight">Research</h3>
+              <p class="mt-3 text-sm text-white/70">Find winners fast with market signals and margin clarity.</p>
+              <div class="mt-6 flex flex-wrap gap-2">
+                <span class="rounded-full px-3 py-1 text-xs ring-1 ring-white/20 text-white/70">Benchmarks</span>
+                <span class="rounded-full px-3 py-1 text-xs ring-1 ring-white/20 text-white/70">Trends</span>
+                <span class="rounded-full px-3 py-1 text-xs ring-1 ring-white/20 text-white/70">Competitors</span>
+              </div>
+            </article>
+
+            <!-- Keywords -->
+            <article class="reveal rounded-2xl border border-white/10 bg-neutral-900 p-8 text-left">
+              <h3 class="font-display text-3xl md:text-4xl tracking-tight">Keywords</h3>
+              <p class="mt-3 text-sm text-white/70">Rank higher with intent-driven discovery and listing optimization.</p>
+              <div class="mt-6 flex flex-wrap gap-2">
+                <span class="rounded-full px-3 py-1 text-xs ring-1 ring-white/20 text-white/70">Long‑tail</span>
+                <span class="rounded-full px-3 py-1 text-xs ring-1 ring-white/20 text-white/70">Difficulty</span>
+                <span class="rounded-full px-3 py-1 text-xs ring-1 ring-white/20 text-white/70">Volume</span>
+              </div>
+            </article>
+
+            <!-- Support -->
+            <article class="reveal rounded-2xl border border-white/10 bg-neutral-900 p-8 text-left">
+              <h3 class="font-display text-3xl md:text-4xl tracking-tight">Support</h3>
+              <p class="mt-3 text-sm text-white/70">Automate replies, escalate with rules, measure satisfaction.</p>
+              <div class="mt-6 flex flex-wrap gap-2">
+                <span class="rounded-full px-3 py-1 text-xs ring-1 ring-white/20 text-white/70">SLA</span>
+                <span class="rounded-full px-3 py-1 text-xs ring-1 ring-white/20 text-white/70">Sentiment</span>
+                <span class="rounded-full px-3 py-1 text-xs ring-1 ring-white/20 text-white/70">Macros</span>
+              </div>
+            </article>
+
+            <!-- Stores -->
+            <article class="reveal rounded-2xl border border-white/10 bg-neutral-900 p-8 text-left">
+              <h3 class="font-display text-3xl md:text-4xl tracking-tight">Stores</h3>
+              <p class="mt-3 text-sm text-white/70">Unified management for Etsy and more with roles and views.</p>
+              <div class="mt-6 flex flex-wrap gap-2">
+                <span class="rounded-full px-3 py-1 text-xs ring-1 ring-white/20 text-white/70">Multi‑store</span>
+                <span class="rounded-full px-3 py-1 text-xs ring-1 ring-white/20 text-white/70">Roles</span>
+                <span class="rounded-full px-3 py-1 text-xs ring-1 ring-white/20 text-white/70">Dashboards</span>
+              </div>
+            </article>
+
+            <!-- VA -->
+            <article class="reveal rounded-2xl border border-white/10 bg-neutral-900 p-8 text-left">
+              <h3 class="font-display text-3xl md:text-4xl tracking-tight">VA</h3>
+              <p class="mt-3 text-sm text-white/70">Assign tasks, standardize workflows, track delivery and quality.</p>
+              <div class="mt-6 flex flex-wrap gap-2">
+                <span class="rounded-full px-3 py-1 text-xs ring-1 ring-white/20 text-white/70">Tasks</span>
+                <span class="rounded-full px-3 py-1 text-xs ring-1 ring-white/20 text-white/70">Workflows</span>
+                <span class="rounded-full px-3 py-1 text-xs ring-1 ring-white/20 text-white/70">Reviews</span>
+              </div>
+            </article>
+
+            <!-- Profit -->
+            <article class="reveal rounded-2xl border border-white/10 bg-neutral-900 p-8 text-left">
+              <h3 class="font-display text-3xl md:text-4xl tracking-tight">Profit</h3>
+              <p class="mt-3 text-sm text-white/70">Crystal-clear margins with fees, shipping, and taxes included.</p>
+              <div class="mt-6 flex flex-wrap gap-2">
+                <span class="rounded-full px-3 py-1 text-xs ring-1 ring-white/20 text-white/70">Fees</span>
+                <span class="rounded-full px-3 py-1 text-xs ring-1 ring-white/20 text-white/70">Shipping</span>
+                <span class="rounded-full px-3 py-1 text-xs ring-1 ring-white/20 text-white/70">Taxes</span>
+              </div>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3) Pricing: full-screen centered, premium two packages -->
+      <section id="pricing" class="min-h-screen snap-start flex items-center justify-center px-6">
+        <div class="mx-auto max-w-6xl w-full text-center">
+          <h2 class="reveal font-display text-2xl sm:text-3xl tracking-tight">Pricing</h2>
+
+          <div class="mt-10 grid grid-cols-1 md:grid-cols-2 gap-6">
+            <!-- Beginner -->
+            <article class="reveal rounded-2xl border border-white/10 bg-neutral-900 p-8 text-left">
+              <div class="flex items-center justify-between">
+                <h3 class="font-display text-2xl tracking-tight">Beginner</h3>
+                <span class="text-xs px-3 py-1 rounded-full ring-1 ring-white/15 text-white/70">Get started</span>
+              </div>
+              <div class="mt-4 flex items-baseline gap-2">
+                <span class="font-display text-5xl">$39</span>
+                <span class="text-sm text-white/60">/ month</span>
+              </div>
+              <ul class="mt-6 space-y-3 text-sm text-white/80">
+                <li class="flex items-start gap-2">
+                  <svg class="mt-0.5 h-4 w-4 text-white" viewBox="0 0 20 20" fill="currentColor"><path d="M16.704 5.29a1 1 0 0 1 .006 1.414l-7.5 7.5a1 1 0 0 1-1.414 0l-3.5-3.5a1 1 0 1 1 1.414-1.414l2.793 2.793 6.793-6.793a1 1 0 0 1 1.408 0Z"/></svg>
+                  Research basics
+                </li>
+                <li class="flex items-start gap-2">
+                  <svg class="mt-0.5 h-4 w-4 text-white" viewBox="0 0 20 20" fill="currentColor"><path d="M16.704 5.29a1 1 0 0 1 .006 1.414l-7.5 7.5a1 1 0 0 1-1.414 0l-3.5-3.5a1 1 0 1 1 1.414-1.414l2.793 2.793 6.793-6.793a1 1 0 0 1 1.408 0Z"/></svg>
+                  Keyword essentials
+                </li>
+                <li class="flex items-start gap-2">
+                  <svg class="mt-0.5 h-4 w-4 text-white" viewBox="0 0 20 20" fill="currentColor"><path d="M16.704 5.29a1 1 0 0 1 .006 1.414l-7.5 7.5a1 1 0 0 1-1.414 0l-3.5-3.5a1 1 0 1 1 1.414-1.414l2.793 2.793 6.793-6.793a1 1 0 0 1 1.408 0Z"/></svg>
+                  Auto support
+                </li>
+              </ul>
+              <div class="mt-8">
+                <a href="#" class="inline-flex items-center justify-center w-full rounded-full px-5 py-2.5 text-sm font-medium bg-white text-black hover:bg-neutral-200 transition">Select Beginner</a>
+              </div>
+            </article>
+
+            <!-- Business (premium highlight) -->
+            <article class="reveal relative rounded-2xl border border-white/10 bg-white text-black p-8 text-left">
+              <div class="absolute -top-3 right-4">
+                <span class="text-[10px] tracking-wide px-3 py-1 rounded-full ring-1 ring-black/10 bg-white">Most popular</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <h3 class="font-display text-2xl tracking-tight">Business</h3>
+                <span class="text-xs px-3 py-1 rounded-full ring-1 ring-black/10 text-black/70">Scale</span>
+              </div>
+              <div class="mt-4 flex items-baseline gap-2">
+                <span class="font-display text-5xl">$99</span>
+                <span class="text-sm text-black/60">/ month</span>
+              </div>
+              <ul class="mt-6 space-y-3 text-sm text-black/80">
+                <li class="flex items-start gap-2">
+                  <svg class="mt-0.5 h-4 w-4 text-black" viewBox="0 0 20 20" fill="currentColor"><path d="M16.704 5.29a1 1 0 0 1 .006 1.414l-7.5 7.5a1 1 0 0 1-1.414 0l-3.5-3.5a1 1 0 1 1 1.414-1.414l2.793 2.793 6.793-6.793a1 1 0 0 1 1.408 0Z"/></svg>
+                  Advanced research & insights
+                </li>
+                <li class="flex items-start gap-2">
+                  <svg class="mt-0.5 h-4 w-4 text-black" viewBox="0 0 20 20" fill="currentColor"><path d="M16.704 5.29a1 1 0 0 1 .006 1.414l-7.5 7.5a1 1 0 0 1-1.414 0l-3.5-3.5a1 1 0 1 1 1.414-1.414l2.793 2.793 6.793-6.793a1 1 0 0 1 1.408 0Z"/></svg>
+                  Ranking‑focused keywords
+                </li>
+                <li class="flex items-start gap-2">
+                  <svg class="mt-0.5 h-4 w-4 text-black" viewBox="0 0 20 20" fill="currentColor"><path d="M16.704 5.29a1 1 0 0 1 .006 1.414l-7.5 7.5a1 1 0 0 1-1.414 0l-3.5-3.5a1 1 0 1 1 1.414-1.414l2.793 2.793 6.793-6.793a1 1 0 0 1 1.408 0Z"/></svg>
+                  Support automation with rules
+                </li>
+                <li class="flex items-start gap-2">
+                  <svg class="mt-0.5 h-4 w-4 text-black" viewBox="0 0 20 20" fill="currentColor"><path d="M16.704 5.29a1 1 0 0 1 .006 1.414l-7.5 7.5a1 1 0 0 1-1.414 0l-3.5-3.5a1 1 0 1 1 1.414-1.414l2.793 2.793 6.793-6.793a1 1 0 0 1 1.408 0Z"/></svg>
+                  Multi‑store + VA roles
+                </li>
+                <li class="flex items-start gap-2">
+                  <svg class="mt-0.5 h-4 w-4 text-black" viewBox="0 0 20 20" fill="currentColor"><path d="M16.704 5.29a1 1 0 0 1 .006 1.414l-7.5 7.5a1 1 0 0 1-1.414 0l-3.5-3.5a1 1 0 1 1 1.414-1.414l2.793 2.793 6.793-6.793a1 1 0 0 1 1.408 0Z"/></svg>
+                  Profit analysis (fees, shipping, taxes)
+                </li>
+              </ul>
+              <div class="mt-8">
+                <a href="#" class="inline-flex items-center justify-center w-full rounded-full px-5 py-2.5 text-sm font-medium bg-black text-white hover:bg-neutral-800 transition">Select Business</a>
+              </div>
+            </article>
+          </div>
+
+          <p class="mt-10 text-xs text-white/50">USD. Cancel anytime.</p>
+        </div>
+      </section>
+    </main>
+
+    <script src="{% static 'landing/landing.js' %}"></script>
+  </body>
+  <script>
+  (function(){
+    var hash = (window.location.hash || '').slice(1);
+    if (!hash) return;
+    var params = new URLSearchParams(hash);
+    if (params.get('type') === 'signup') {
+      var token = params.get('access_token');
+      var email = '';
+      if (token) {
+        try {
+          var payload = token.split('.')[1];
+          var b64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+          var jsonStr = atob(b64);
+          var data = JSON.parse(jsonStr);
+          email = (data && (data.email || (data.user_metadata && data.user_metadata.email))) || '';
+        } catch (e) {}
+      }
+      var url = "{% url 'auth_confirm' %}";
+      if (email) url += "?email=" + encodeURIComponent(email);
+      window.location.replace(url);
+    }
+  })();
+</script>
+</html>

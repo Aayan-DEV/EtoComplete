@@ -1,0 +1,149 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-black">
+  <head>
+    <meta charset="utf-8" />
+    <title>Eto — Dashboard</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['OpenSauce','ui-sans-serif','system-ui','-apple-system','Segoe UI','Roboto','Helvetica Neue','Arial','Noto Sans','sans-serif'],
+              display: ['Melodrame','OpenSauce','serif']
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      @font-face {
+        font-family: "OpenSauce";
+        src: url("/static/font/open_sauce/OpenSauceSans-Regular.ttf") format("truetype");
+        font-weight: 400; font-style: normal; font-display: swap;
+      }
+      @font-face {
+        font-family: "Melodrame";
+        src: url("/static/font/relationship_of_melodrame/Relationship of mélodrame.ttf") format("truetype");
+        font-weight: 400; font-style: normal; font-display: swap;
+      }
+      html, body { font-family: "OpenSauce", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif; }
+    </style>
+  </head>
+  <body class="h-screen overflow-hidden bg-black text-white font-sans antialiased">
+    {% include "snippets/message_alerts/messages.html" %}
+
+    <main class="h-full grid grid-cols-[16rem_1fr]">
+      {% include "snippets/sidebar/sidebar.html" %}
+
+      <section class="h-full flex flex-col">
+        <!-- Top bar -->
+        <header class="flex items-center justify-between px-6 py-4 border-b border-white/10">
+          <h1 class="font-display text-2xl tracking-tight">Dashboard</h1>
+
+          <!-- Actions: Stores + Profile -->
+          <div class="relative flex items-center gap-2">
+            <a href="{% url 'users_stores' %}" class="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium ring-1 ring-white/20 hover:ring-white transition">
+              <span>Stores</span>
+            </a>
+
+            {% with full_name=request.user.get_full_name|default_if_none:"" %}
+            {% with display_name=full_name|default:request.user.username %}
+            <button id="user-toggle" class="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium ring-1 ring-white/20 hover:ring-white transition">
+              <span>{{ display_name }}</span>
+              <svg class="h-4 w-4 opacity-70" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                <path d="M5.23 7.21a.75.75 0 0 1 1.06-.02L10 10.67l3.71-3.48a.75.75 0 0 1 1.04 1.08l-4.23 3.97a1 1 0 0 1-1.38 0L5.25 8.27a.75.75 0 0 1-.02-1.06Z"/>
+              </svg>
+            </button>
+            {% endwith %}
+            {% endwith %}
+
+            <!-- Details panel -->
+            <div id="user-panel" class="absolute right-0 mt-2 w-72 rounded-xl bg-neutral-900 ring-1 ring-white/20 shadow-xl hidden">
+              <div class="px-4 py-3 text-sm">
+                <div class="flex items-center justify-between">
+                  <span class="text-white/70">Email</span>
+                  <span class="font-medium">{{ request.user.email }}</span>
+                </div>
+                <div class="mt-2 flex items-center justify-between">
+                  <span class="text-white/70">Confirmed</span>
+                  <span class="font-medium">
+                    {% if request.user.profile and request.user.profile.email_confirmed %}Yes{% else %}No{% endif %}
+                  </span>
+                </div>
+                <div class="mt-2 flex items-center justify-between">
+                  <span class="text-white/70">Joined</span>
+                  <span class="font-medium">{{ request.user.date_joined|date:"M j, Y" }}</span>
+                </div>
+              </div>
+              <div class="px-4 py-3 border-t border-white/10">
+                <a href="{% url 'logout' %}" class="inline-flex items-center justify-center rounded-lg px-3 py-2 text-sm font-medium bg-white text-black hover:bg-neutral-200 transition w-full">
+                  Sign out
+                </a>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <!-- Content -->
+        <div class="flex-1 overflow-y-auto px-6 py-6">
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <a href="{% url 'users_stores' %}" class="group rounded-xl p-4 ring-1 ring-white/10 hover:ring-white transition">
+              <h3 class="text-base font-medium">Stores</h3>
+              <p class="mt-1 text-sm text-white/60">Manage your connected marketplaces.</p>
+            </a>
+
+            <a href="{% url 'users_va_admin' %}" class="group rounded-xl p-4 ring-1 ring-white/10 hover:ring-white transition">
+              <h3 class="text-base font-medium">VA Management</h3>
+              <p class="mt-1 text-sm text-white/60">Coordinate VA workflows and permissions.</p>
+            </a>
+
+            <a href="{% url 'users_customer_support' %}" class="group rounded-xl p-4 ring-1 ring-white/10 hover:ring-white transition">
+              <h3 class="text-base font-medium">Customer Support</h3>
+              <p class="mt-1 text-sm text-white/60">Automate and track customer interactions.</p>
+            </a>
+
+            <a href="{% url 'users_bulk_research' %}" class="group rounded-xl p-4 ring-1 ring-white/10 hover:ring-white transition">
+              <h3 class="text-base font-medium">Bulk Product Research</h3>
+              <p class="mt-1 text-sm text-white/60">Analyze products at scale.</p>
+            </a>
+
+            <a href="{% url 'users_single_research' %}" class="group rounded-xl p-4 ring-1 ring-white/10 hover:ring-white transition">
+              <h3 class="text-base font-medium">Single Product Research</h3>
+              <p class="mt-1 text-sm text-white/60">Deep dive into one product.</p>
+            </a>
+
+            <a href="{% url 'users_keyword_search' %}" class="group rounded-xl p-4 ring-1 ring-white/10 hover:ring-white transition">
+              <h3 class="text-base font-medium">Keyword Analysis</h3>
+              <p class="mt-1 text-sm text-white/60">Discover and prioritize keywords.</p>
+            </a>
+
+            <a href="{% url 'users_settings' %}" class="group rounded-xl p-4 ring-1 ring-white/10 hover:ring-white transition">
+              <h3 class="text-base font-medium">Settings</h3>
+              <p class="mt-1 text-sm text-white/60">Personalize your experience.</p>
+            </a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      (function(){
+        var btn = document.getElementById('user-toggle');
+        var panel = document.getElementById('user-panel');
+        if (!btn || !panel) return;
+        btn.addEventListener('click', function(){
+          panel.classList.toggle('hidden');
+        });
+        document.addEventListener('click', function(e){
+          if (!panel.classList.contains('hidden')) {
+            var inside = panel.contains(e.target) || btn.contains(e.target);
+            if (!inside) panel.classList.add('hidden');
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

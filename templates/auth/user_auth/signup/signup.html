@@ -1,0 +1,184 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-black">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Eto — Sign up</title>
+
+    <!-- Tailwind CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['OpenSauce', 'ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'Helvetica Neue', 'Arial', 'Noto Sans', 'sans-serif'],
+              display: ['Melodrame', 'OpenSauce', 'serif']
+            }
+          }
+        }
+      }
+    </script>
+
+    <style>
+      @font-face {
+        font-family: "OpenSauce";
+        src: url("/static/font/open_sauce/OpenSauceSans-Regular.ttf") format("truetype");
+        font-weight: 400; font-style: normal; font-display: swap;
+      }
+      @font-face {
+        font-family: "Melodrame";
+        src: url("/static/font/relationship_of_melodrame/Relationship of mélodrame.ttf") format("truetype");
+        font-weight: 400; font-style: normal; font-display: swap;
+      }
+      html, body { font-family: "OpenSauce", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif; }
+    </style>
+  </head>
+
+  <body class="h-screen overflow-hidden bg-black text-white font-sans antialiased">
+    {% include "snippets/message_alerts/messages.html" %}
+
+    <!-- Full-screen, two equal halves; no card blocks -->
+    <main class="h-full grid grid-rows-2 md:grid-rows-1 md:grid-cols-2">
+      <!-- Left half -->
+      <section class="h-full flex items-center justify-center p-6">
+        <div class="w-full max-w-xl text-center">
+          <p class="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ring-1 ring-white/20 text-white/80">Now specialising in Etsy</p>
+          <h1 class="mt-6 font-display text-[clamp(3rem,10vw,7rem)] leading-[0.95] tracking-tight">
+            1000x
+          </h1>
+          <p class="mt-2 font-display text-3xl md:text-4xl tracking-tight">your e commerce productivity</p>
+          <p class="mt-4 text-white/70">Research, keywords, support, stores, VA workflows, and profit — unified.</p>
+          <p class="mt-6 text-xs text-white/50">
+            Already have an account?
+            <a href="{% url 'login' %}" class="underline underline-offset-4 text-white">Login</a>
+        </p>
+        </div>
+      </section>
+
+      <!-- Right half -->
+      <section class="h-full flex items-center justify-center p-6">
+        <div class="w-full max-w-md">
+          <h2 class="font-display text-[2.25rem] md:text-[2.75rem] leading-tight tracking-tight">Sign up</h2>
+
+          <!-- Social providers (icons) -->
+          <div class="mt-4 grid grid-cols-1 gap-2">
+            <a href="{% url 'oauth_redirect' 'google' %}" class="inline-flex items-center justify-center gap-3 rounded-full px-4 py-2 text-sm font-medium ring-1 ring-white/20 hover:ring-white transition">
+              <img src="https://cdn.simpleicons.org/google/FFFFFF" alt="Google" class="h-5 w-5"/>
+              <span>Sign up with Google</span>
+            </a>
+            <a href="{% url 'oauth_redirect' 'discord' %}" class="inline-flex items-center justify-center gap-3 rounded-full px-4 py-2 text-sm font-medium ring-1 ring-white/20 hover:ring-white transition">
+              <img src="https://cdn.simpleicons.org/discord/FFFFFF" alt="Discord" class="h-5 w-5"/>
+              <span>Sign up with Discord</span>
+            </a>
+            <a href="{% url 'oauth_redirect' 'apple' %}" class="inline-flex items-center justify-center gap-3 rounded-full px-4 py-2 text-sm font-medium ring-1 ring-white/20 hover:ring-white transition">
+              <img src="https://cdn.simpleicons.org/apple/FFFFFF" alt="Apple" class="h-5 w-5"/>
+              <span>Sign up with Apple</span>
+            </a>
+            <a href="{% url 'oauth_redirect' 'etsy' %}" class="inline-flex items-center justify-center gap-3 rounded-full px-4 py-2 text-sm font-medium ring-1 ring-white/20 hover:ring-white transition">
+              <img src="https://cdn.simpleicons.org/etsy/FFFFFF" alt="Etsy" class="h-5 w-5"/>
+              <span>Connect Etsy Store</span>
+            </a>
+          </div>
+
+          <!-- Email/password form — compact to avoid scroll -->
+          <form action="{% url 'signup' %}" method="post" class="mt-5 grid grid-cols-1 gap-3" id="signup-form" novalidate>
+            {% csrf_token %}
+            <div class="grid grid-cols-2 gap-3">
+              <input type="text" name="first_name" placeholder="First name" required class="w-full rounded-xl bg-transparent ring-1 ring-white/20 px-4 py-2 outline-none focus:ring-white" />
+              <input type="text" name="last_name" placeholder="Last name" required class="w-full rounded-xl bg-transparent ring-1 ring-white/20 px-4 py-2 outline-none focus:ring-white" />
+            </div>
+
+            <input type="email" name="email" placeholder="Email" required class="w-full rounded-xl bg-transparent ring-1 ring-white/20 px-4 py-2 outline-none focus:ring-white" />
+
+            <input type="password" name="password" placeholder="Password" required minlength="8" class="w-full rounded-xl bg-transparent ring-1 ring-white/20 px-4 py-2 outline-none focus:ring-white" />
+
+            <input type="password" name="confirm_password" placeholder="Rewrite password" required minlength="8" class="w-full rounded-xl bg-transparent ring-1 ring-white/20 px-4 py-2 outline-none focus:ring-white" />
+
+            <!-- Password rules (compact) -->
+            <ul id="pw-rules" class="mt-1 space-y-0.5 text-[11px] text-white/60">
+              <li data-rule="len">• 8+ characters</li>
+              <li data-rule="upper">• Uppercase letter</li>
+              <li data-rule="num">• Number</li>
+              <li data-rule="special">• Special character</li>
+              <li data-rule="match">• Matches confirmation</li>
+            </ul>
+
+            <button type="submit" class="mt-3 inline-flex items-center justify-center rounded-full px-6 py-3 text-base font-medium bg-white text-black hover:bg-neutral-200 transition disabled:opacity-60" id="signup-btn">
+              Sign up
+            </button>
+
+            <!-- Show resend link only after successful signup -->
+            {% if messages %}
+              {% for message in messages %}
+                {% if message.level_tag == 'success' %}
+                  <p class="mt-2 text-xs text-white/70">
+                    Didn’t get the email? <a href="{% url 'auth_resend' %}" class="underline underline-offset-4">Resend email confirmation</a>
+                  </p>
+                {% endif %}
+              {% endfor %}
+            {% endif %}
+          </form>
+        </div>
+      </section>
+    </main>
+
+    <!-- Inside the existing <form> remains the same; below is the script block at the end of file -->
+    <script>
+    // Client-side email + password validation
+    (function(){
+        const form = document.getElementById('signup-form');
+        const email = form.querySelector('input[name="email"]');
+        const first = form.querySelector('input[name="first_name"]');
+        const last = form.querySelector('input[name="last_name"]');
+        const pw = form.querySelector('input[name="password"]');
+        const c = form.querySelector('input[name="confirm_password"]');
+        const btn = document.getElementById('signup-btn');
+
+        const isEmailValid = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+        const rules = {
+        len: v => v.length >= 8,
+        upper: v => /[A-Z]/.test(v),
+        num: v => /\d/.test(v),
+        special: v => /[^A-Za-z0-9]/.test(v),
+        match: v => v === c.value
+        };
+
+        const update = () => {
+        const v = pw.value || '';
+        const okEmail = isEmailValid(email.value || '');
+        let okPw = true;
+        Object.entries(rules).forEach(([k, fn]) => {
+            const li = document.querySelector('#pw-rules [data-rule="'+k+'"]');
+            const good = fn(v);
+            li.style.color = good ? 'rgb(34 197 94)' : 'rgb(161 161 170)';
+            okPw = okPw && good;
+        });
+        const okNames = (first.value || '').trim().length > 0 && (last.value || '').trim().length > 0;
+        btn.disabled = !(okEmail && okPw && okNames);
+        };
+
+        [email, first, last, pw, c].forEach(el => el.addEventListener('input', update));
+        update();
+    })();
+
+    // After confirm: show "Redirecting..." and auto-redirect to dashboard
+    (function(){
+        const url = new URL(window.location.href);
+        const confirmed = url.searchParams.get('confirmed') === '1';
+        const next = url.searchParams.get('next');
+        if (confirmed && next === 'dashboard') {
+        const note = document.createElement('p');
+        note.className = 'mt-2 text-xs text-white/70';
+        note.textContent = 'Redirecting to dashboard…';
+        const form = document.getElementById('signup-form');
+        if (form) form.appendChild(note);
+        setTimeout(function(){
+            window.location.href = "{% url 'users_main_dash' %}";
+        }, 1500);
+        }
+    })();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,15 @@
+@font-face {
+  font-family: "Melodrame";
+  src: url("/static/font/relationship_of_melodrame/Relationship of mélodrame.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+.coming-soon {
+  color: #9ca3af;
+  font-size: clamp(2rem, 5vw, 4rem);
+  letter-spacing: 0.02em;
+  text-align: center;
+  opacity: 0.9;
+}

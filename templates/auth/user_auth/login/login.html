@@ -1,0 +1,133 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-black">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Eto — Login</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['OpenSauce','ui-sans-serif','system-ui','-apple-system','Segoe UI','Roboto','Helvetica Neue','Arial','Noto Sans','sans-serif'],
+              display: ['Melodrame','OpenSauce','serif']
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      @font-face {
+        font-family: "OpenSauce";
+        src: url("/static/font/open_sauce/OpenSauceSans-Regular.ttf") format("truetype");
+        font-weight: 400; font-style: normal; font-display: swap;
+      }
+      @font-face {
+        font-family: "Melodrame";
+        src: url("/static/font/relationship_of_melodrame/Relationship of mélodrame.ttf") format("truetype");
+        font-weight: 400; font-style: normal; font-display: swap;
+      }
+      html, body { font-family: "OpenSauce", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif; }
+    </style>
+  </head>
+  <body class="h-screen overflow-hidden bg-black text-white font-sans antialiased">
+    {% include "snippets/message_alerts/messages.html" %}
+    <div class="flex-1 text-sm">{{ message|safe }}</div>
+
+    <main class="h-full grid grid-rows-2 md:grid-rows-1 md:grid-cols-2">
+      <!-- Left: pitch -->
+      <section class="h-full flex items-center justify-center p-6">
+        <div class="w-full max-w-xl text-center">
+          <p class="inline-flex items-center rounded-full px-3 py-1 text-xs font-medium ring-1 ring-white/20 text-white/80">Now specialising in Etsy</p>
+          <h1 class="mt-6 font-display text-[clamp(3rem,10vw,7rem)] leading-[0.95] tracking-tight">1000x</h1>
+          <p class="mt-2 font-display text-3xl md:text-4xl tracking-tight">your e commerce productivity</p>
+          <p class="mt-4 text-white/70">Log in to continue optimizing research, keywords, support, stores, VA workflows, and profit.</p>
+          <p class="mt-6 text-xs text-white/50">New here? <a href="{% url 'signup' %}" class="underline underline-offset-4 text-white">Create an account</a></p>
+        </div>
+      </section>
+
+      <!-- Right: login -->
+      <section class="h-full flex items-center justify-center p-6">
+        <div class="w-full max-w-md">
+            <h2 class="font-display text-[2.25rem] md:text-[2.75rem] leading-tight tracking-tight">Login</h2>
+
+          <!-- Social providers -->
+          <div class="mt-4 grid grid-cols-1 gap-2">
+            <a href="{% url 'oauth_redirect' 'google' %}" class="inline-flex items-center justify-center gap-3 rounded-full px-4 py-2 text-sm font-medium ring-1 ring-white/20 hover:ring-white transition">
+              <img src="https://cdn.simpleicons.org/google/FFFFFF" alt="Google" class="h-5 w-5"/>
+              <span>Login with Google</span>
+            </a>
+            <a href="{% url 'oauth_redirect' 'discord' %}" class="inline-flex items-center justify-center gap-3 rounded-full px-4 py-2 text-sm font-medium ring-1 ring-white/20 hover:ring-white transition">
+              <img src="https://cdn.simpleicons.org/discord/FFFFFF" alt="Discord" class="h-5 w-5"/>
+              <span>Login with Discord</span>
+            </a>
+            <a href="{% url 'oauth_redirect' 'apple' %}" class="inline-flex items-center justify-center gap-3 rounded-full px-4 py-2 text-sm font-medium ring-1 ring-white/20 hover:ring-white transition">
+              <img src="https://cdn.simpleicons.org/apple/FFFFFF" alt="Apple" class="h-5 w-5"/>
+              <span>Login with Apple</span>
+            </a>
+            <a href="{% url 'oauth_redirect' 'etsy' %}" class="inline-flex items-center justify-center gap-3 rounded-full px-4 py-2 text-sm font-medium ring-1 ring-white/20 hover:ring-white transition">
+              <img src="https://cdn.simpleicons.org/etsy/FFFFFF" alt="Etsy" class="h-5 w-5"/>
+              <span>Connect Etsy Store</span>
+            </a>
+          </div>
+
+          <!-- Email/password form -->
+          <form action="{% url 'login' %}" method="post" class="mt-5 grid grid-cols-1 gap-3" id="login-form" novalidate>
+                {% csrf_token %}
+                <input type="email" name="email" placeholder="Email" required class="w-full rounded-xl bg-transparent ring-1 ring-white/20 px-4 py-2 outline-none focus:ring-white" />
+                <input type="password" name="password" placeholder="Password" required minlength="8" class="w-full rounded-xl bg-transparent ring-1 ring-white/20 px-4 py-2 outline-none focus:ring-white" />
+                <!-- Premium toggle style with robust slide behavior -->
+                <label class="group inline-flex items-center gap-3 cursor-pointer select-none text-xs text-white/80">
+                    <input type="checkbox" name="remember" class="peer sr-only" aria-checked="false" />
+                    <span class="toggle-track relative inline-flex h-6 w-11 items-center rounded-full bg-white/10 ring-1 ring-white/20 transition-colors duration-300">
+                    <span class="toggle-knob absolute left-1 inline-block h-4 w-4 rounded-full bg-white shadow transition-transform duration-300"></span>
+                    </span>
+                    <span class="font-medium">Remember me</span>
+                </label>
+                <button type="submit" class="mt-2 inline-flex items-center justify-center rounded-full px-6 py-3 text-base font-medium bg-white text-black hover:bg-neutral-200 transition" id="login-btn">
+                    Login
+                </button>
+            </form>
+        </div>
+      </section>
+    </main>
+
+    <style>
+    .toggle-track { border: 1px solid rgba(255,255,255,0.2); background-color: rgba(255,255,255,0.08); }
+    .peer:checked + .toggle-track { background-color: rgba(255,255,255,0.18); border-color: rgba(255,255,255,0.35); }
+    .peer:checked + .toggle-track .toggle-knob { transform: translateX(20px); background-color: #000; }
+    </style>
+
+    <script>
+    (function(){
+        var form = document.getElementById('login-form');
+        var email = form.querySelector('input[name="email"]');
+        var remember = form.querySelector('input[name="remember"]');
+
+        try {
+        var lastEmail = localStorage.getItem('eto_last_email');
+        if (lastEmail) email.value = lastEmail;
+        var rememberVal = localStorage.getItem('eto_remember');
+        if (rememberVal === '1') {
+            remember.checked = true;
+            remember.setAttribute('aria-checked', 'true');
+        }
+        } catch (e) {}
+
+        remember.addEventListener('change', function(){
+        remember.setAttribute('aria-checked', remember.checked ? 'true' : 'false');
+        });
+
+        form.addEventListener('submit', function(){
+        try {
+            localStorage.setItem('eto_last_email', email.value || '');
+            localStorage.setItem('eto_remember', remember.checked ? '1' : '0');
+        } catch (e) {}
+        });
+    })();
+    </script>
+  </body>
+</html>

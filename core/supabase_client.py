@@ -38,3 +38,38 @@ def ping_supabase() -> dict:
     except Exception as exc:
         result["details"] = {"error": str(exc)}
         return result
+
+def oauth_authorize_url(provider: str, redirect_to: str) -> str:
+    load_dotenv(settings.BASE_DIR / ".env", override=True)
+    base = (os.getenv("SUPABASE_URL") or settings.SUPABASE_URL).rstrip("/")
+    return f"{base}/auth/v1/authorize?provider={provider}&redirect_to={redirect_to}"
+
+def sign_up_user(email: str, password: str, data: dict | None = None, redirect_to: str | None = None) -> dict:
+    load_dotenv(settings.BASE_DIR / ".env", override=True)
+    url = (os.getenv("SUPABASE_URL") or settings.SUPABASE_URL).rstrip("/") + "/auth/v1/signup"
+    headers = {
+        "apikey": os.getenv("SUPABASE_ANON_KEY") or settings.SUPABASE_ANON_KEY,
+        "Content-Type": "application/json",
+    }
+    payload = {"email": email, "password": password, "data": data or {}}
+    if redirect_to:
+        payload["email_redirect_to"] = redirect_to
+    resp = requests.post(url, headers=headers, json=payload, timeout=10)
+    try:
+        body = resp.json()
+    except Exception:
+        body = None
+    return {"ok": resp.ok, "status": resp.status_code, "data": body}
+
+def resend_signup_confirmation(email: str, redirect_to: str | None = None) -> bool:
+    load_dotenv(settings.BASE_DIR / ".env", override=True)
+    url = (os.getenv("SUPABASE_URL") or settings.SUPABASE_URL).rstrip("/") + "/auth/v1/resend"
+    headers = {
+        "apikey": os.getenv("SUPABASE_ANON_KEY") or settings.SUPABASE_ANON_KEY,
+        "Content-Type": "application/json",
+    }
+    payload = {"type": "signup", "email": email}
+    if redirect_to:
+        payload["email_redirect_to"] = redirect_to
+    resp = requests.post(url, headers=headers, json=payload, timeout=10)
+    return resp.ok

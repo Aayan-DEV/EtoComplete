@@ -1,0 +1,85 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-black">
+  <head>
+    <meta charset="utf-8" />
+    <title>Eto — Stores</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['OpenSauce','ui-sans-serif','system-ui','-apple-system','Segoe UI','Roboto','Helvetica Neue','Arial','Noto Sans','sans-serif'],
+              display: ['Melodrame','OpenSauce','serif']
+            }
+          }
+        }
+      }
+    </script>
+    <link
+      rel="preload"
+      href="/static/font/relationship_of_melodrame/Relationship of mélodrame.ttf"
+      as="font"
+      type="font/ttf"
+      crossorigin
+    />
+    <link rel="stylesheet" href="{% static 'users_dasboard/stores/stores.css' %}">
+    <script src="{% static 'users_dasboard/stores/stores.js' %}" defer></script>
+  </head>
+  <body class="h-screen overflow-hidden bg-black text-white font-sans antialiased">
+    {% include "snippets/message_alerts/messages.html" %}
+
+    <main class="h-full grid grid-cols-[16rem_1fr]">
+      {% include "snippets/sidebar/sidebar.html" %}
+
+      <section class="h-full flex flex-col">
+        <header class="flex items-center justify-between px-6 py-4 border-b border-white/10">
+          <h1 class="font-display text-xl tracking-tight">Stores</h1>
+          <div class="relative">
+            {% with full_name=request.user.get_full_name|default_if_none:"" %}
+            {% with display_name=full_name|default:request.user.username %}
+            <button id="user-toggle" class="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium ring-1 ring-white/20 hover:ring-white transition">
+              <span>{{ display_name }}</span>
+              <svg class="h-4 w-4 opacity-70" viewBox="0 0 20 20" fill="currentColor"><path d="M5.23 7.21a.75.75 0 0 1 1.06-.02L10 10.67l3.71-3.48a.75.75 0 0 1 1.04 1.08l-4.23 3.97a1 1 0 0 1-1.38 0L5.25 8.27a.75.75 0 0 1-.02-1.06Z"/></svg>
+            </button>
+            {% endwith %}
+            {% endwith %}
+            <div id="user-panel" class="absolute right-0 mt-2 w-72 rounded-xl bg-neutral-900 ring-1 ring-white/20 shadow-xl hidden">
+              <div class="px-4 py-3 text-sm">
+                <div class="flex items-center justify-between"><span class="text-white/70">Email</span><span class="font-medium">{{ request.user.email }}</span></div>
+                <div class="mt-2 flex items-center justify-between"><span class="text-white/70">Confirmed</span><span class="font-medium">{% if request.user.profile and request.user.profile.email_confirmed %}Yes{% else %}No{% endif %}</span></div>
+                <div class="mt-2 flex items-center justify-between"><span class="text-white/70">Joined</span><span class="font-medium">{{ request.user.date_joined|date:"M j, Y" }}</span></div>
+              </div>
+              <div class="px-4 py-3 border-t border-white/10">
+                <a href="{% url 'logout' %}" class="inline-flex w-full items-center justify-center rounded-lg px-3 py-2 text-sm font-medium bg-white text-black hover:bg-neutral-200 transition">Sign out</a>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <div class="flex-1 overflow-y-auto px-6 py-6">
+          <div class="h-full grid place-items-center">
+            <h2 class="coming-soon font-display">Coming soon</h2>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      (function(){
+        var btn = document.getElementById('user-toggle');
+        var panel = document.getElementById('user-panel');
+        if (!btn || !panel) return;
+        btn.addEventListener('click', function(){ panel.classList.toggle('hidden'); });
+        document.addEventListener('click', function(e){
+          if (!panel.classList.contains('hidden')) {
+            var inside = panel.contains(e.target) || btn.contains(e.target);
+            if (!inside) panel.classList.add('hidden');
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

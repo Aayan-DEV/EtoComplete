@@ -1,0 +1,189 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+  <head>
+    <meta charset="utf-8" />
+    <title>Eto — Settings</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['OpenSauce','ui-sans-serif','system-ui','-apple-system','Segoe UI','Roboto','Helvetica Neue','Arial','Noto Sans','sans-serif'],
+              display: ['Melodrame','OpenSauce','serif']
+            }
+          }
+        }
+      };
+    </script>
+    <!-- Apply saved theme early to avoid dark-first rendering -->
+    <script>
+      (function(){
+        var t = 'dark';
+        try {
+          var saved = localStorage.getItem('eto_theme');
+          if (saved === 'light' || saved === 'dark') t = saved;
+        } catch(e) {}
+        document.documentElement.setAttribute('data-theme', t);
+      })();
+    </script>
+    <style>
+      @font-face {
+        font-family:"OpenSauce";
+        src:url("/static/font/open_sauce/OpenSauceSans-Regular.ttf") format("truetype");
+        font-display:swap;
+      }
+      @font-face {
+        font-family:"Melodrame";
+        src:url("/static/font/relationship_of_melodrame/Relationship of mélodrame.ttf") format("truetype");
+        font-display:swap;
+      }
+      html, body {
+        font-family:"OpenSauce", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+      }
+      /* Page-scoped light-mode help so all text shades and rings flip cleanly */
+      html[data-theme="light"] .text-white { color: var(--text) !important; }
+      html[data-theme="light"] .text-white\/50,
+      html[data-theme="light"] .text-white\/60,
+      html[data-theme="light"] .text-white\/70 { color: var(--muted) !important; }
+      html[data-theme="light"] .ring-white\/10 { --tw-ring-color: rgba(0,0,0,0.10) !important; }
+      html[data-theme="light"] .ring-white\/20 { --tw-ring-color: rgba(0,0,0,0.20) !important; }
+      html[data-theme="light"] .border-white\/10 { border-color: rgba(0,0,0,0.12) !important; }
+    </style>
+  </head>
+  <body class="h-screen overflow-hidden bg-black text-white font-sans antialiased">
+    {% include "snippets/message_alerts/messages.html" %}
+    <main class="h-full grid grid-cols-[16rem_1fr]">
+      {% include "snippets/sidebar/sidebar.html" %}
+      <section class="h-full flex flex-col">
+        <header class="relative z-30 flex items-center justify-between px-6 py-4 border-b border-white/10">
+          <h1 class="font-display text-xl tracking-tight">Settings</h1>
+          <div class="relative">
+            {% with full_name=request.user.get_full_name|default_if_none:"" %}{% with display_name=full_name|default:request.user.username %}
+            <button id="user-toggle" class="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium ring-1 ring-white/20 hover:ring-white transition">
+              <span>{{ display_name }}</span>
+              <svg class="h-4 w-4 opacity-70" viewBox="0 0 20 20" fill="currentColor"><path d="M5.23 7.21a.75.75 0 0 1 1.06-.02L10 10.67l3.71-3.48a.75.75 0 0 1 1.04 1.08l-4.23 3.97a1 1 0 0 1-1.38 0L5.25 8.27a.75.75 0 0 1-.02-1.06Z"/></svg>
+            </button>
+            {% endwith %}{% endwith %}
+            <div id="user-panel" class="absolute right-0 mt-2 w-72 rounded-xl bg-neutral-900 ring-1 ring-white/20 shadow-xl hidden z-50">
+              <div class="px-4 py-3 text-sm">
+                <div class="flex items-center justify-between"><span class="text-white/70">Email</span><span class="font-medium">{{ request.user.email }}</span></div>
+                <div class="mt-2 flex items-center justify-between"><span class="text-white/70">Confirmed</span><span class="font-medium">{% if request.user.profile and request.user.profile.email_confirmed %}Yes{% else %}No{% endif %}</span></div>
+                <div class="mt-2 flex items-center justify-between"><span class="text-white/70">Joined</span><span class="font-medium">{{ request.user.date_joined|date:"M j, Y" }}</span></div>
+              </div>
+              <div class="px-4 py-3 border-t border-white/10">
+                <a href="{% url 'logout' %}" class="inline-flex w-full items-center justify-center rounded-lg px-3 py-2 text-sm font-medium bg-white text-black hover:bg-neutral-200 transition">Sign out</a>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <div class="flex-1 overflow-y-auto px-6 py-6">
+          <!-- Account summary -->
+          <div class="rounded-xl p-4 ring-1 ring-white/10">
+            <h2 class="text-base font-medium">Account</h2>
+            <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+              <div class="flex items-center justify-between">
+                <span class="text-white/60">Name</span>
+                <span class="font-medium">
+                  {% with n=request.user.get_full_name %}
+                    {% if n %}{{ n }}{% else %}—{% endif %}
+                  {% endwith %}
+                </span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-white/60">Email (login)</span>
+                <span class="font-medium">{{ request.user.email|default:request.user.username }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-white/60">Email confirmed</span>
+                <span class="font-medium">
+                  {% if request.user.profile and request.user.profile.email_confirmed %}Yes{% else %}No{% endif %}
+                </span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-white/60">Joined</span>
+                <span class="font-medium">{{ request.user.date_joined|date:"M j, Y" }}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-white/60">Last login</span>
+                <span class="font-medium">{% if request.user.last_login %}{{ request.user.last_login|date:"M j, Y H:i" }}{% else %}—{% endif %}</span>
+              </div>
+              <div class="flex items-center justify-between">
+                <span class="text-white/60">Status</span>
+                <span class="font-medium">{% if request.user.is_active %}Active{% else %}Disabled{% endif %}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Update name -->
+          <div class="mt-6 rounded-xl p-4 ring-1 ring-white/10">
+            <h2 class="text-base font-medium">Update name</h2>
+            <form method="post" action="{% url 'users_settings' %}" class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3" novalidate>
+              {% csrf_token %}
+              <input type="hidden" name="action" value="update_profile" />
+              <div>
+                <label class="block text-xs text-white/60 mb-1">First name</label>
+                <input type="text" name="first_name" value="{{ request.user.first_name }}" class="w-full rounded-lg bg-transparent ring-1 ring-white/20 px-3 py-2 outline-none focus:ring-white text-sm" />
+              </div>
+              <div>
+                <label class="block text-xs text-white/60 mb-1">Last name</label>
+                <input type="text" name="last_name" value="{{ request.user.last_name }}" class="w-full rounded-lg bg-transparent ring-1 ring-white/20 px-3 py-2 outline-none focus:ring-white text-sm" />
+              </div>
+              <div class="sm:col-span-2">
+                <button type="submit" class="inline-flex items-center justify-center rounded-lg px-4 py-2 text-sm font-medium bg-white text-black hover:bg-neutral-200 transition">
+                  Save changes
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <!-- Change password -->
+          <div class="mt-6 rounded-xl p-4 ring-1 ring-white/10">
+            <h2 class="text-base font-medium">Change password</h2>
+            <form method="post" action="{% url 'users_settings' %}" class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3" novalidate>
+              {% csrf_token %}
+              <input type="hidden" name="action" value="change_password" />
+              <div class="sm:col-span-2">
+                <label class="block text-xs text-white/60 mb-1">Current password</label>
+                <input type="password" name="current_password" class="w-full rounded-lg bg-transparent ring-1 ring-white/20 px-3 py-2 outline-none focus:ring-white text-sm" required />
+              </div>
+              <div>
+                <label class="block text-xs text-white/60 mb-1">New password</label>
+                <input type="password" name="new_password" minlength="8" class="w-full rounded-lg bg-transparent ring-1 ring-white/20 px-3 py-2 outline-none focus:ring-white text-sm" required />
+              </div>
+              <div>
+                <label class="block text-xs text-white/60 mb-1">Confirm new password</label>
+                <input type="password" name="confirm_password" minlength="8" class="w-full rounded-lg bg-transparent ring-1 ring-white/20 px-3 py-2 outline-none focus:ring-white text-sm" required />
+              </div>
+              <div class="sm:col-span-2">
+                <p class="text-xs text-white/50">Use 8+ characters with uppercase, lowercase, number, and symbol.</p>
+              </div>
+              <div class="sm:col-span-2">
+                <button type="submit" class="inline-flex items-center justify-center rounded-lg px-4 py-2 text-sm font-medium bg-white text-black hover:bg-neutral-200 transition">
+                  Update password
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </section>
+    </main>
+    <script>
+      // Compact user panel behavior; z-index ensures it overlays content
+      (function(){
+        var btn = document.getElementById('user-toggle');
+        var panel = document.getElementById('user-panel');
+        if (!btn || !panel) return;
+        btn.addEventListener('click', function(){ panel.classList.toggle('hidden'); });
+        document.addEventListener('click', function(e){
+          if (!panel.classList.contains('hidden')) {
+            var inside = panel.contains(e.target) || btn.contains(e.target);
+            if (!inside) panel.classList.add('hidden');
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

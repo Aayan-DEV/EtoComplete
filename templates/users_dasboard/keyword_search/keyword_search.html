@@ -1,0 +1,130 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+  <head>
+    <meta charset="utf-8" />
+    <title>Eto — Keyword Analysis</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['OpenSauce','ui-sans-serif','system-ui','-apple-system','Segoe UI','Roboto','Helvetica Neue','Arial','Noto Sans','sans-serif'],
+              display: ['Melodrame','OpenSauce','serif']
+            }
+          }
+        }
+      };
+    </script>
+    <!-- Apply saved theme early to avoid dark-first rendering -->
+    <script>
+      (function(){
+        var t = 'dark';
+        try {
+          var saved = localStorage.getItem('eto_theme');
+          if (saved === 'light' || saved === 'dark') t = saved;
+        } catch(e) {}
+        document.documentElement.setAttribute('data-theme', t);
+      })();
+    </script>
+    <style>
+      @font-face {
+        font-family:"OpenSauce";
+        src:url("/static/font/open_sauce/OpenSauceSans-Regular.ttf") format("truetype");
+        font-display:swap;
+      }
+      @font-face {
+        font-family:"Melodrame";
+        src:url("/static/font/relationship_of_melodrame/Relationship of mélodrame.ttf") format("truetype");
+        font-display:swap;
+      }
+      html, body {
+        font-family:"OpenSauce", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+      }
+    </style>
+    <link rel="stylesheet" href="{% static 'users_dasboard/keyword_search/keyword_search.css' %}">
+  </head>
+  <body class="h-screen overflow-hidden bg-black text-white font-sans antialiased">
+    {% include "snippets/message_alerts/messages.html" %}
+    <main class="h-full grid grid-cols-[16rem_1fr]">
+      {% include "snippets/sidebar/sidebar.html" %}
+      <section class="h-full flex flex-col">
+        <header class="relative z-30 flex items-center justify-between px-6 py-4 border-b border-white/10">
+          <h1 class="font-display text-xl tracking-tight">Keyword Analysis</h1>
+          <div class="relative">
+            {% with full_name=request.user.get_full_name|default_if_none:"" %}{% with display_name=full_name|default:request.user.username %}
+            <button id="user-toggle" class="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium ring-1 ring-white/20 hover:ring-white transition">
+              <span>{{ display_name }}</span>
+              <svg class="h-4 w-4 opacity-70" viewBox="0 0 20 20" fill="currentColor"><path d="M5.23 7.21a.75.75 0 0 1 1.06-.02L10 10.67l3.71-3.48a.75.75 0 0 1 1.04 1.08l-4.23 3.97a1 1 0 0 1-1.38 0L5.25 8.27a.75.75 0 0 1-.02-1.06Z"/></svg>
+            </button>
+            {% endwith %}{% endwith %}
+            <div id="user-panel" class="absolute right-0 mt-2 w-72 rounded-xl bg-neutral-900 ring-1 ring-white/20 shadow-xl hidden">
+              <div class="px-4 py-3 text-sm">
+                <div class="flex items-center justify-between"><span class="text-white/70">Email</span><span class="font-medium">{{ request.user.email }}</span></div>
+                <div class="mt-2 flex items-center justify-between"><span class="text-white/70">Confirmed</span><span class="font-medium">{% if request.user.profile and request.user.profile.email_confirmed %}Yes{% else %}No{% endif %}</span></div>
+                <div class="mt-2 flex items-center justify-between"><span class="text-white/70">Joined</span><span class="font-medium">{{ request.user.date_joined|date:"M j, Y" }}</span></div>
+              </div>
+              <div class="px-4 py-3 border-t border-white/10">
+                <a href="{% url 'logout' %}" class="inline-flex w-full items-center justify-center rounded-lg px-3 py-2 text-sm font-medium bg-white text-black hover:bg-neutral-200 transition">Sign out</a>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <div class="flex-1 overflow-y-auto px-6 py-6">
+          <div class="rounded-xl p-5 ring-1 ring-white/10 bg-neutral-950">
+            <form id="ki-form" class="flex items-center gap-3">
+              <label for="ki-input" class="sr-only">Keyword</label>
+              <input
+                id="ki-input"
+                name="keyword"
+                type="text"
+                placeholder="e.g. vintage tote bag"
+                autocomplete="off"
+                class="flex-1 rounded-lg bg-neutral-900 px-3 py-2 text-sm ring-1 ring-white/10 focus:ring-white/30 outline-none placeholder:text-white/40" />
+              <button id="ki-search-btn" type="submit"
+                      class="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium bg-white text-black hover:bg-neutral-200 transition">
+                <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path d="M13.78 12.72a7 7 0 1 0-1.06 1.06l3.49 3.49a.75.75 0 1 0 1.06-1.06l-3.49-3.49ZM14 8a6 6 0 1 1-12 0 6 6 0 0 1 12 0Z"/></svg>
+                Search
+              </button>
+            </form>
+            <div id="ki-status" class="mt-3 text-sm text-white/70"></div>
+
+            <div id="ki-results" class="mt-6 space-y-6">
+              <div id="ki-metrics" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4"></div>
+
+              <div id="ki-chart-wrap" class="rounded-xl ring-1 ring-white/10 p-4">
+                <div class="flex items-center justify-between">
+                  <h2 class="font-display text-lg">Trend</h2>
+                  <span id="ki-chart-legend" class="text-xs text-white/50"></span>
+                </div>
+                <div class="mt-3 h-64">
+                  <canvas id="ki-chart" aria-label="Keyword trend"></canvas>
+                </div>
+                <div id="ki-no-trend" class="hidden text-sm text-white/60">No trend data available for this keyword.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      (function(){
+        var b=document.getElementById('user-toggle'),p=document.getElementById('user-panel');
+        if(!b||!p) return;
+        b.addEventListener('click',function(){p.classList.toggle('hidden');});
+        document.addEventListener('click',function(e){
+          if(!p.classList.contains('hidden')){
+            var i=p.contains(e.target)||b.contains(e.target);
+            if(!i) p.classList.add('hidden');
+          }
+        });
+      })();
+    </script>
+    <script>window.KI_SEARCH_URL = "{% url 'keyword_insight_search' %}";</script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="{% static 'users_dasboard/keyword_search/keyword_search.js' %}"></script>
+  </body>
+</html>

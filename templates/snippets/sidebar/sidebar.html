@@ -1,0 +1,229 @@
+{% load static %}
+<aside class="flex h-screen w-64 shrink-0 flex-col bg-[var(--surface-1)] ring-1 ring-[var(--border)] sticky top-0">
+  <nav class="flex-1 px-3 py-4 space-y-1 text-sm overflow-y-auto">
+    {% url 'users_main_dash' as dashboard_url %}
+    {% url 'users_va_admin' as va_admin_url %}
+    {% url 'users_customer_support' as support_url %}
+    {% url 'users_single_research' as single_url %}
+    {% url 'users_bulk_research' as bulk_url %}
+    {% url 'users_keyword_search' as keywords_url %}
+    {% url 'users_settings' as settings_url %}
+
+    <!-- Dashboard -->
+    <a href="{{ dashboard_url }}"
+       class="group flex items-center gap-3 rounded-lg px-3 py-2 transition
+              {% if request.path == dashboard_url %} bg-white/10 text-white {% else %} text-white/70 hover:text-white hover:bg-white/5 {% endif %}"
+       aria-current="{% if request.path == dashboard_url %}page{% else %}false{% endif %}">
+      <svg class="h-4 w-4 opacity-80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3" y="3" width="8" height="8" rx="2"></rect>
+        <rect x="13" y="3" width="8" height="8" rx="2"></rect>
+        <rect x="13" y="13" width="8" height="8" rx="2"></rect>
+        <rect x="3" y="13" width="8" height="8" rx="2"></rect>
+      </svg>
+      <span class="font-medium">Dashboard</span>
+    </a>
+
+    <!-- Manage VA's -->
+    <a href="{{ va_admin_url }}"
+       class="group flex items-center gap-3 rounded-lg px-3 py-2 transition
+              {% if request.path == va_admin_url %} bg-white/10 text-white {% else %} text-white/70 hover:text-white hover:bg-white/5 {% endif %}"
+       aria-current="{% if request.path == va_admin_url %}page{% else %}false{% endif %}">
+      <svg class="h-4 w-4 opacity-80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="8" cy="7.5" r="3"></circle>
+        <path d="M3 14c0-2.5 3-4 5-4s5 1.5 5 4"></path>
+        <circle cx="17" cy="8.5" r="2.5"></circle>
+        <path d="M13.5 14.5c.7-1.8 2.7-2.8 4.5-2.8 1.5 0 3 .6 3.9 1.8"></path>
+      </svg>
+      <span class="font-medium">Manage VA's</span>
+    </a>
+
+    <!-- Customer Support -->
+    <a href="{{ support_url }}"
+       class="group flex items-center gap-3 rounded-lg px-3 py-2 transition
+              {% if request.path == support_url %} bg-white/10 text-white {% else %} text-white/70 hover:text-white hover:bg-white/5 {% endif %}"
+       aria-current="{% if request.path == support_url %}page{% else %}false{% endif %}">
+      <svg class="h-4 w-4 opacity-80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M5 18l3-3h9a3 3 0 0 0 3-3V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v11z"></path>
+        <path d="M8 9h8M8 12h5"></path>
+      </svg>
+      <span class="font-medium">Customer Support</span>
+    </a>
+
+    <!-- Product Research (toggle reveals choice panel) -->
+    <div class="relative">
+      <button id="product-research-toggle"
+              class="group flex w-full items-center gap-3 rounded-lg px-3 py-2 transition
+                     {% if request.path == single_url or request.path == bulk_url %} bg-white/10 text-white {% else %} text-white/70 hover:text-white hover:bg-white/5 {% endif %}"
+              aria-expanded="false"
+              aria-controls="product-research-panel"
+              type="button">
+        <svg class="h-4 w-4 opacity-80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="5.5"></circle>
+          <path d="M20 20l-4.5-4.5"></path>
+        </svg>
+        <span class="font-medium">Product Research</span>
+        <svg class="ml-auto h-4 w-4 opacity-70" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+          <path d="M5.23 7.21a.75.75 0 0 1 1.06-.02L10 10.67l3.71-3.48a.75.75 0 0 1 1.04 1.08l-4.23 3.97a1 1 0 0 1-1.38 0L5.25 8.27a.75.75 0 0 1-.02-1.06Z"/>
+        </svg>
+      </button>
+
+      <!-- Choice panel -->
+      <div id="product-research-panel" class="mt-2 hidden rounded-xl bg-neutral-900 ring-1 ring-white/20 shadow-xl">
+        <a href="{{ single_url }}" class="flex items-start gap-3 p-3 rounded-lg hover:bg-white/5 transition">
+          <svg class="h-4 w-4 opacity-80 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="5.5"></circle>
+            <path d="M20 20l-4.5-4.5"></path>
+          </svg>
+          <div class="flex-1">
+            <div class="text-sm font-medium">Single search</div>
+            <p class="mt-1 text-xs text-white/70">
+              Single search is made so you can research one specific product more deeply, but looking at all its stats in one place
+            </p>
+          </div>
+        </a>
+        <div class="border-t border-white/10"></div>
+        <a href="{{ bulk_url }}" class="flex items-start gap-3 p-3 rounded-lg hover:bg-white/5 transition">
+          <svg class="h-4 w-4 opacity-80 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="3" width="7" height="7" rx="2"></rect>
+            <rect x="14" y="3" width="7" height="7" rx="2"></rect>
+            <rect x="3" y="14" width="7" height="7" rx="2"></rect>
+            <rect x="14" y="14" width="7" height="7" rx="2"></rect>
+          </svg>
+          <div class="flex-1">
+            <div class="text-sm font-medium">Bulk product search</div>
+            <p class="mt-1 text-xs text-white/70">
+              Bulk product research is a way to go through hundereds of products and find the best ones in 2 clicks
+            </p>
+          </div>
+        </a>
+      </div>
+    </div>
+
+    <!-- Keyword Analysis -->
+    <a href="{{ keywords_url }}"
+       class="group flex items-center gap-3 rounded-lg px-3 py-2 transition
+              {% if request.path == keywords_url %} bg-white/10 text-white {% else %} text-white/70 hover:text-white hover:bg-white/5 {% endif %}"
+       aria-current="{% if request.path == keywords_url %}page{% else %}false{% endif %}">
+      <svg class="h-4 w-4 opacity-80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M3 16l6-6 4 4 8-8"></path>
+        <path d="M21 21H3V3"></path>
+      </svg>
+      <span class="font-medium">Keyword Analysis</span>
+    </a>
+
+    <!-- Settings -->
+    <a href="{{ settings_url }}"
+       class="group flex items-center gap-3 rounded-lg px-3 py-2 transition
+              {% if request.path == settings_url %} bg-white/10 text-white {% else %} text-white/70 hover:text-white hover:bg-white/5 {% endif %}"
+       aria-current="{% if request.path == settings_url %}page{% else %}false{% endif %}">
+      <svg class="h-4 w-4 opacity-80" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 6h16M10 6v8"></path>
+        <path d="M4 12h16M14 12v6"></path>
+        <path d="M4 18h16M6 18v-4"></path>
+      </svg>
+      <span class="font-medium">Settings</span>
+    </a>
+  </nav>
+
+   <div class="px-3 pb-4 space-y-3 sticky bottom-0 bg-[var(--surface-1)]">
+    <!-- Theme toggle -->
+    <div class="flex items-center justify-between rounded-lg px-3 py-2 text-xs ring-1 ring-[var(--border)]">
+      <span class="text-white/70">Theme</span>
+      <button id="theme-toggle" class="inline-flex items-center gap-2 rounded-md px-2 py-1 ring-1 ring-white/20 hover:ring-white transition">
+        <svg id="theme-icon" class="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 3a9 9 0 1 0 9 9c0-.34-.02-.67-.05-1A7 7 0 1 1 13 3c-.34-.03-.66-.05-1-.05Z"/>
+        </svg>
+        <span id="theme-label" class="font-medium">Dark</span>
+      </button>
+    </div>
+
+    <a href="{% url 'logout' %}" class="w-full inline-flex items-center justify-center rounded-lg px-3 py-2 text-sm font-medium bg-[var(--surface-1)] text-[var(--text)] hover:bg-[var(--surface-2)] transition border border-[var(--border)]">
+      Sign out
+    </a>
+  </div>
+</aside>
+
+<!-- Global theme overrides; loaded with sidebar include -->
+<style>
+  /* Black/White theme tokens */
+  html { color-scheme: dark; --bg:#000; --surface-1:#0a0a0a; --surface-2:#121212; --text:#fff; --muted:rgba(255,255,255,0.70); --border:rgba(255,255,255,0.12); --ring:rgba(255,255,255,0.22); }
+  html[data-theme="light"] { color-scheme: light; --bg:#fff; --surface-1:#fff; --surface-2:#f5f5f5; --text:#000; --muted:rgba(0,0,0,0.70); --border:rgba(0,0,0,0.12); --ring:rgba(0,0,0,0.22); }
+
+  /* Map common classes to tokens for both modes */
+  html[data-theme="dark"] .bg-white,
+  html[data-theme="dark"] .bg-neutral-50,
+  html[data-theme="dark"] .bg-neutral-100 { background-color: var(--surface-1) !important; }
+  html[data-theme="dark"] .hover\:bg-neutral-50:hover,
+  html[data-theme="dark"] .hover\:bg-white\/5:hover { background-color: var(--surface-2) !important; }
+
+  html[data-theme="light"] .bg-black,
+  html[data-theme="light"] .bg-black\/80,
+  html[data-theme="light"] .bg-neutral-900,
+  html[data-theme="light"] .bg-neutral-950 { background-color: var(--surface-1) !important; }
+
+  /* Text mappings */
+  html[data-theme="dark"] .text-black { color: var(--text) !important; }
+  html[data-theme="light"] .text-white,
+  html[data-theme="light"] .text-white\/70,
+  html[data-theme="light"] .text-white\/60,
+  html[data-theme="light"] .text-white\/50 { color: var(--text) !important; }
+
+  /* Border and ring mappings */
+  [data-theme] .border-neutral-200,
+  [data-theme] .border-neutral-300 { border-color: var(--border) !important; }
+  [data-theme] .ring-white\/10,
+  [data-theme] .ring-white\/20 { --tw-ring-color: var(--ring) !important; }
+
+  /* General hover ring override */
+  html[data-theme="light"] .hover\:ring-white:hover { --tw-ring-color: var(--ring) !important; }
+</style>
+
+<script>
+  (function(){
+    var root = document.documentElement;
+    var key = 'eto_theme';
+    var btn = document.getElementById('theme-toggle');
+    var label = document.getElementById('theme-label');
+    var icon = document.getElementById('theme-icon');
+
+    function applyTheme(t) {
+      root.setAttribute('data-theme', t);
+      if (label) label.textContent = (t === 'light') ? 'Light' : 'Dark';
+      if (icon) {
+        icon.style.opacity = t === 'light' ? '0.9' : '0.9';
+      }
+    }
+
+    var saved = localStorage.getItem(key) || 'dark';
+    applyTheme(saved);
+
+    if (btn) {
+      btn.addEventListener('click', function(){
+        var next = root.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+        localStorage.setItem(key, next);
+        applyTheme(next);
+      });
+    }
+
+    // Product Research choice panel toggle
+    var prToggle = document.getElementById('product-research-toggle');
+    var prPanel = document.getElementById('product-research-panel');
+    if (prToggle && prPanel) {
+      prToggle.addEventListener('click', function(e){
+        e.preventDefault();
+        var isOpen = !prPanel.classList.contains('hidden');
+        prPanel.classList.toggle('hidden');
+        prToggle.setAttribute('aria-expanded', String(!isOpen));
+      });
+      document.addEventListener('click', function(e){
+        if (!prPanel.classList.contains('hidden')) {
+          var inside = prPanel.contains(e.target) || prToggle.contains(e.target);
+          if (!inside) {
+            prPanel.classList.add('hidden');
+            prToggle.setAttribute('aria-expanded','false');
+          }
+        }
+      });
+    }
+  })();
+</script>

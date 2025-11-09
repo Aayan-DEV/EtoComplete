@@ -1,0 +1,86 @@
+{% if messages %}
+<!-- Overlay container: fixed, above all UI, no layout shift -->
+<div id="global-messages" class="fixed top-0 left-0 right-0 z-[10000] pointer-events-none">
+  <div class="mx-auto w-[92%] max-w-xl pt-3" style="padding-top: calc(env(safe-area-inset-top, 0px) + 12px);">
+    {% for message in messages %}
+      {% with tag=message.tags %}
+      <div class="msg relative pointer-events-auto rounded-2xl px-4 py-3 shadow-xl ring-1 flex items-start gap-3
+                  {% if tag == 'success' %} bg-green-600/20 text-green-100 ring-green-400/40
+                  {% elif tag == 'error' %} bg-red-600/20 text-red-100 ring-red-400/40
+                  {% elif tag == 'warning' %} bg-yellow-600/20 text-yellow-100 ring-yellow-400/40
+                  {% else %} bg-neutral-900/90 text-white ring-white/20 {% endif %} msg-enter"
+           role="alert" aria-live="polite">
+        <!-- Icon -->
+        <span class="shrink-0">
+          {% if tag == 'success' %}
+          <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M16.704 5.29a1 1 0 0 1 .006 1.414l-7.5 7.5a1 1 0 0 1-1.414 0l-3.5-3.5a1 1 0 1 1 1.414-1.414l2.793 2.793 6.793-6.793a1 1 0 0 1 1.408 0Z"/></svg>
+          {% elif tag == 'error' %}
+          <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M10 3.5a1 1 0 0 1 .894.553l6.5 12a1 1 0 0 1-.894 1.447H3.5a1 1 0 0 1-.894-1.447l6.5-12A1 1 0 0 1 10 3.5Zm0 3a.75.75 0 0 0-.75.75v4.5a.75.75 0 1 0 1.5 0v-4.5A.75.75 0 0 0 10 6.5Zm0 8a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"/></svg>
+          {% elif tag == 'warning' %}
+          <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M10 3a1 1 0 0 1 .894.553l7 14A1 1 0 0 1 17 19H3a1 1 0 0 1-.894-1.447l7-14A1 1 0 0 1 10 3ZM10 7a.75.75 0 0 0-.75.75V11a.75.75 0 1 0 1.5 0V7.75A.75.75 0 0 0 10 7Zm0 7a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z"/></svg>
+          {% else %}
+          <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M10 2a8 8 0 1 0 8 8 8.01 8.01 0 0 0-8-8Zm0 11a1 1 0 1 1-1 1 1 1 0 0 1 1-1Zm1-6v4a1 1 0 1 1-2 0V7a1 1 0 0 1 2 0Z"/></svg>
+          {% endif %}
+        </span>
+
+        <!-- Message text -->
+        <div class="flex-1 text-sm">{{ message }}</div>
+
+        <!-- Close button -->
+        <button type="button" class="msg-close absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-md bg-black/20 text-white hover:bg-black/30 focus:outline-none" aria-label="Dismiss">
+          <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M5.22 5.22a.75.75 0 0 1 1.06 0L10 8.94l3.72-3.72a.75.75 0 1 1 1.06 1.06L11.06 10l3.72 3.72a.75.75 0 1 1-1.06 1.06L10 11.06l-3.72 3.72a.75.75 0 1 1-1.06-1.06L8.94 10 5.22 6.28a.75.75 0 0 1 0-1.06Z"/></svg>
+        </button>
+      </div>
+      {% endwith %}
+    {% endfor %}
+  </div>
+</div>
+
+<style>
+/* Slide-down entry, slide-up exit; no layout shift as overlay is fixed */
+#global-messages .msg.msg-enter { opacity: 0; transform: translateY(-24px) scale(0.98); }
+#global-messages .msg.msg-enter-active { animation: msgSlideDown 450ms cubic-bezier(0.22,1,0.36,1) forwards; }
+#global-messages .msg.msg-exit-active { animation: msgSlideUp 300ms ease forwards; }
+
+@keyframes msgSlideDown {
+  0% { opacity: 0; transform: translateY(-24px) scale(0.98); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes msgSlideUp {
+  0% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-16px) scale(0.98); }
+}
+</style>
+
+<script>
+(function(){
+  var container = document.getElementById('global-messages');
+  if (!container) return;
+  var items = container.querySelectorAll('.msg.msg-enter');
+
+  items.forEach(function(el, i){
+    // Enter animation
+    requestAnimationFrame(function(){
+      el.classList.add('msg-enter-active');
+    });
+
+    // Auto-dismiss with small stagger
+    var hold = 4000 + i * 250; // ms
+    var exit = function(){
+      el.classList.add('msg-exit-active');
+      setTimeout(function(){ el.remove(); }, 320);
+    };
+    var timer = setTimeout(exit, hold);
+
+    // Manual close
+    var btn = el.querySelector('.msg-close');
+    if (btn) {
+      btn.addEventListener('click', function(){
+        clearTimeout(timer);
+        exit();
+      });
+    }
+  });
+})();
+</script>
+{% endif %}

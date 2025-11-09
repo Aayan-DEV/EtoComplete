@@ -1,0 +1,29 @@
+/* Keyword Insight page — theme-aware styles using global tokens */
+#ki-form { will-change: transform; }
+#ki-input { transition: box-shadow .2s ease, border-color .2s ease; }
+#ki-input:focus { box-shadow: 0 0 0 3px var(--ring); border-color: var(--ring); }
+#ki-status { min-height: 1.25rem; color: var(--muted); }
+
+#ki-metrics .card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: .75rem;
+  padding: 1rem;
+}
+#ki-metrics .value {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+#ki-metrics .sub {
+  color: var(--muted);
+  font-size: .8rem;
+}
+
+#ki-chart-wrap {
+  background: var(--surface-1);
+}
+#ki-chart {
+  width: 100% !important;
+  height: 100% !important;
+}
