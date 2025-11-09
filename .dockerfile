@@ -19,4 +19,4 @@ COPY . /app
 EXPOSE 8000
 
 # Start Gunicorn; uses $PORT if provided (e.g., from hosting)
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-8000} config.wsgi:application"]
+CMD ["bash", "-lc", "python manage.py collectstatic --noinput && gunicorn --bind 0.0.0.0:${PORT:-8000} config.wsgi:application"]

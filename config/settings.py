@@ -77,15 +77,23 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 DB_USE_SQLITE = os.getenv("DB_USE_SQLITE", "False").lower() == "true"
+DB_CONN_MAX_AGE = int(os.getenv("DB_CONN_MAX_AGE", "60"))
+DB_SSL_REQUIRE = os.getenv("DB_SSL_REQUIRE", "True").lower() == "true"
+
+DATABASE_HOST_OVERRIDE = os.getenv("DATABASE_HOST")
+DATABASE_PORT_OVERRIDE = os.getenv("DATABASE_PORT")
 
 if DATABASE_URL and not DB_USE_SQLITE:
-    DATABASES = {
-        "default": dj_database_url.parse(
-            DATABASE_URL,
-            conn_max_age=int(os.getenv("DB_CONN_MAX_AGE", "60")),
-            ssl_require=True,
-        )
-    }
+    default_db = dj_database_url.parse(
+        DATABASE_URL,
+        conn_max_age=DB_CONN_MAX_AGE,
+        ssl_require=DB_SSL_REQUIRE,
+    )
+    if DATABASE_HOST_OVERRIDE:
+        default_db["HOST"] = DATABASE_HOST_OVERRIDE
+    if DATABASE_PORT_OVERRIDE:
+        default_db["PORT"] = DATABASE_PORT_OVERRIDE
+    DATABASES = {"default": default_db}
 else:
     DATABASES = {
         "default": {
