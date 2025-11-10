@@ -51,7 +51,8 @@ class SessionWorker:
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         self.thread = threading.Thread(target=self._run, name=f"BulkSession-{self.session_id}", daemon=True)
-        # New: persistence throttling state
+        # External upstream session id (generated at start)
+        self.upstream_session_id = session.external_session_id
         self._last_persist_ts = 0.0
         self._last_persist_len = 0
 
@@ -198,7 +199,8 @@ class SessionWorker:
                     json={
                         'user_id': self.user_id,
                         'keyword': self.keyword,
-                        'desired_total': self.desired_total
+                        'desired_total': self.desired_total,
+                        'session_id': self.upstream_session_id,
                     },
                     headers={
                         'Accept': 'text/event-stream',
@@ -334,6 +336,18 @@ class BulkStreamManager:
             w = self.workers.get(session.id)
             if w and w.thread.is_alive():
                 return
+            # Backfill external_session_id for legacy sessions if missing
+            if not getattr(session, 'external_session_id', None):
+                try:
+                    import re, random
+                    ts = timezone.now().strftime('%Y%m%d%H%M%S')
+                    slug = re.sub(r'[^a-z0-9]+', '-', (session.keyword or '').lower()).strip('-')[:30]
+                    rand5 = ''.join(random.choice('0123456789') for _ in range(5))
+                    external_id = f"sess-{session.user.username}-{slug}-{session.desired_total}-{ts}-{rand5}"
+                    BulkResearchSession.objects.filter(id=session.id).update(external_session_id=external_id)
+                    session.external_session_id = external_id
+                except Exception:
+                    pass
             w = SessionWorker(session, user_id=user_id)
             self.workers[session.id] = w
             w.start()

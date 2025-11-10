@@ -35,6 +35,31 @@
   var POLL_INTERVAL_MS = 2000;
   var pollTimer = null;
 
+  // Track last SSE heartbeat to determine if a stream is truly alive
+  var streamLastHeartbeat = {}; // { id: timestamp }
+    var HEARTBEAT_STALE_MS = 5000;
+
+    // Reconnect timing and state
+    var STALE_THRESHOLD_MS = 2000;           // extra 2s before countdown
+    var COUNTDOWN_SECONDS = 4;               // 4,3,2,1
+    var ENABLE_AFTER_MS = STALE_THRESHOLD_MS + COUNTDOWN_SECONDS * 1000;      // 6s
+    var AUTO_RECONNECT_AFTER_MS = ENABLE_AFTER_MS + 4000;                     // 10s
+    var reconnectUiTimer = null;             // interval to update button labels
+    var autoReconnectIssuedAt = {};          // { id: timestamp }
+
+  // Returns true only when the stream is OPEN and has a recent heartbeat
+  function isStreamAlive(sessionId) {
+    var es = streams && streams[sessionId];
+    if (!es || typeof es.readyState !== 'number') return false;
+    if (es.readyState !== 1) return false; // require OPEN
+    var last = streamLastHeartbeat[sessionId] || 0;
+    return (Date.now() - last) <= HEARTBEAT_STALE_MS;
+  }
+
+  // Auto-refresh for aggregated ("All") view: 3s interval
+  var AGG_REFRESH_INTERVAL_MS = 3000;
+  var aggregatedRefreshTimer = null;
+
   // Current view and sort state
   var lastEntriesRaw = [];
   // Ensure we track current view entries for refreshes
@@ -91,7 +116,11 @@
 
     if (typeof streamRetries === 'object') {
       streamRetries[sessionId] = 0;
-      es.onopen = function () { streamRetries[sessionId] = 0; };
+      es.onopen = function () {
+        streamRetries[sessionId] = 0;
+        // Do not mark heartbeat here; only mark on actual messages
+        try { renderSessionsList(); } catch (_) {}
+      };
     }
 
     es.onmessage = function (ev) {
@@ -109,11 +138,180 @@
       }
       try {
         handleStreamUpdate(sessionId, obj);
+        streamLastHeartbeat[sessionId] = Date.now();
+        autoReconnectIssuedAt[sessionId] = 0;
       } catch (e) {
         alert('Stream update handling failed: ' + e.message);
         console.error('Stream update error', e, obj);
       }
     };
+
+    es.onerror = function (err) {
+      try { es.close(); } catch (_) {}
+      try { delete streams[sessionId]; } catch (_) {}
+      try { delete streamLastHeartbeat[sessionId]; } catch (_) {}
+      try { renderSessionsList(); } catch (_) {}
+      try { scheduleReconnect(sessionId); } catch (_) {}
+      console.warn('Stream error for session', sessionId, err);
+    };
+}
+
+// Start heartbeat-driven reconnect UI updates
+  (function startReconnectUiTimer() {
+    if (reconnectUiTimer) return;
+    reconnectUiTimer = setInterval(function updateReconnectUi() {
+      if (!sessionsList) return;
+      var now = Date.now();
+      sessions.forEach(function (s) {
+        if (String(s.status).toLowerCase() !== 'ongoing') return;
+        var row = sessionsList.querySelector('.session-row[data-session-id="' + s.id + '"]');
+        if (!row) return;
+        var btn = row.querySelector('.reconnect-session');
+        if (!btn) return;
+
+        var alive = isStreamAlive(s.id);
+        var last = streamLastHeartbeat[s.id] || 0;
+        var age = now - last;
+
+        if (alive) {
+          btn.disabled = true;
+          btn.textContent = 'Reconnect';
+          return;
+        }
+        if (age <= STALE_THRESHOLD_MS) {
+          btn.disabled = true;
+          btn.textContent = 'Reconnect';
+          return;
+        }
+        if (age <= ENABLE_AFTER_MS) {
+          var remaining = Math.ceil((ENABLE_AFTER_MS - age) / 1000);
+          btn.disabled = true;
+          btn.textContent = String(remaining);
+          return;
+        }
+        // Enable manual reconnect after 6s stale
+        btn.disabled = false;
+        btn.textContent = 'Reconnect';
+
+        // Auto reconnect after 10s stale (throttled)
+        if (age > AUTO_RECONNECT_AFTER_MS) {
+          var issued = autoReconnectIssuedAt[s.id] || 0;
+          if (!issued || now - issued > AUTO_RECONNECT_AFTER_MS) {
+            autoReconnectIssuedAt[s.id] = now;
+            reconnectSession(s.id, btn);
+          }
+        }
+      });
+    }, 500);
+  })();
+
+function reconnectSession(sessionId, reconBtn) {
+    var endpoint = '/api/bulk-research/reconnect/' + sessionId + '/';
+    if (reconBtn) { reconBtn.disabled = true; reconBtn.textContent = 'Reconnecting…'; }
+
+    fetch(endpoint, {
+        method: 'POST',
+        headers: Object.assign({ 'Accept': 'application/json' }, csrfHeader()),
+        credentials: 'same-origin'
+    })
+    .then(function (r) {
+        return r.json().catch(function(){ return {}; }).then(function (body) {
+            if (!r.ok) {
+                var msg = (body && body.error) || ('Reconnect failed (' + r.status + ')');
+                throw new Error(msg);
+            }
+            return body;
+        });
+    })
+    .then(function (out) {
+        var local = findSession(sessionId) || { id: sessionId };
+        if (out && typeof out.status === 'string') local.status = out.status;
+        if (out && out.progress) local.progress = out.progress;
+        updateSession(local);
+
+        var isCompleted = String(out && out.status || '').toLowerCase() === 'completed';
+
+        function entriesFromReconnect(o) {
+            if (o && Array.isArray(o.entries)) return o.entries;
+            if (o && o.megafile && Array.isArray(o.megafile.entries)) return o.megafile.entries;
+            return [];
+        }
+
+        showToast(isCompleted ? 'Session Completed.' : 'Reconnected — resuming live updates…', 'success');
+
+        if (isCompleted) {
+            var respEntries = entriesFromReconnect(out);
+            var isSelected = resultsSelect && String(resultsSelect.value) === String(sessionId);
+            if (Array.isArray(respEntries) && respEntries.length > 0) {
+                var sorted = applySorting(respEntries);
+                saveCachedSessionEntries(sessionId, sorted);
+                if (isSelected) {
+                    try { progressiveRenderSession(sessionId, sorted, productsGrid.children.length); }
+                    catch (e) { console.warn('Progressive render fallback', e); renderProductsGrid(sorted); }
+                } else if (resultsSelect && resultsSelect.value === '__all__') {
+                    try { renderAggregatedFromCache(); } catch (e) { console.error('Re-render aggregated after cache update failed', e); }
+                }
+            } else {
+                if (isSelected) {
+                    updateResultsTitleForSession(local);
+                    loadSessionResults(sessionId, true);
+                } else if (resultsSelect && resultsSelect.value === '__all__') {
+                    loadAllSessionsResults();
+                }
+            }
+            updatePolling();
+        } else {
+            attachStream(sessionId);
+            updatePolling();
+        }
+    })
+    .catch(function (err) {
+        showToast('Reconnect failed: ' + err.message, 'error');
+    })
+    .finally(function () {
+        showLoading(false);
+        if (reconBtn) { reconBtn.textContent = 'Reconnect'; reconBtn.disabled = false; }
+    });
+}
+
+// Helpers for aggregated progressive rendering
+function getAggregatedEntries() {
+    var ids = sessions.map(function (s) { return s && s.id; }).filter(Boolean);
+    var merged = [];
+    ids.forEach(function (id) {
+        var arr = sessionResultsCache[id];
+        if (Array.isArray(arr) && arr.length) merged = merged.concat(arr);
+    });
+    return applySorting(merged);
+}
+
+var aggregatedProgressTimer = null;
+function progressiveRenderAggregated(initialCount) {
+    // ... existing code ...
+    var entries = getAggregatedEntries();
+    var total = entries.length;
+    var count = Math.max(0, Math.min(initialCount || 0, total));
+    var batch = 8;
+    var delayMs = 100;
+
+    if (aggregatedProgressTimer) { try { clearTimeout(aggregatedProgressTimer); } catch (_) {} aggregatedProgressTimer = null; }
+
+    function step() {
+        if (!resultsSelect || resultsSelect.value !== '__all__') { aggregatedProgressTimer = null; return; }
+        count = Math.min(total, count + batch);
+        try { renderProductsGrid(entries.slice(0, count)); } catch (e) { console.error('Aggregated progressive render failed', e); }
+        if (count < total) {
+            aggregatedProgressTimer = setTimeout(step, delayMs);
+        } else {
+            aggregatedProgressTimer = null;
+        }
+    }
+
+    // Initial quick paint
+    try { renderProductsGrid(entries.slice(0, Math.min(count || 8, total))); } catch (e) { console.error('Aggregated initial render failed', e); }
+    lastEntriesRaw = entries;
+    currentViewEntries = entries.slice(0, Math.min(count || 8, total));
+    if (Math.min(count || 8, total) < total) aggregatedProgressTimer = setTimeout(step, delayMs);
 }
 
     // renderAggregatedFromCache: merge cached entries across sessions and render
@@ -132,38 +330,119 @@
         upsertResultsSelect();
     }
 
+  function loadAllSessionsResults() {
+    // ... existing code ...
+    // No spinner; we progressively render instead
+    ensureStreamsAttached();
+
+    // Abort any previous aggregated request
+    if (allSessionsController) { try { allSessionsController.abort(); } catch (_) {} }
+    allSessionsController = new AbortController();
+    var signal = allSessionsController.signal;
+
+    var ids = sessions.map(function (s) { return s && s.id; }).filter(Boolean);
+    if (ids.length === 0) {
+        lastEntriesRaw = [];
+        currentViewEntries = [];
+        renderProductsGrid([]);
+        upsertResultsSelect();
+        return;
+    }
+
+    // Seed from whatever cache exists and start progressive rendering
+    try { progressiveRenderAggregated(productsGrid.children.length); } catch (e) { console.error('Render aggregated from cache failed', e); }
+
+    // Fetch sessions:
+    // - Always fetch ongoing sessions (to pick up new products).
+    // - Fetch completed sessions only if cache is missing.
+    var remaining = 0;
+    ids.forEach(function (id) {
+        var s = findSession(id);
+        var isOngoing = s && String(s.status).toLowerCase() === 'ongoing';
+
+        // Prefer cached data; if missing, try sessionStorage hydrate
+        var cached = sessionResultsCache[id];
+        if (!Array.isArray(cached) || cached.length === 0) {
+            var hydrated = getCachedSessionEntries(id);
+            if (Array.isArray(hydrated) && hydrated.length) {
+                cached = hydrated;
+            }
+        }
+        var haveCache = Array.isArray(cached) && cached.length > 0;
+
+        if (haveCache && !isOngoing) {
+            sessionCounts[id] = cached.length;
+            return; // no need to fetch completed with cache
+        }
+
+        remaining += 1;
+
+        var url = window.BULK_RESEARCH_RESULT_URL_BASE + id + '/';
+        fetch(url, { credentials: 'same-origin', signal: signal, headers: { 'Accept': 'application/json' } })
+            .then(function (r) {
+                var isJson = ((r.headers.get('Content-Type') || '').toLowerCase().indexOf('application/json') !== -1);
+                return r.text().then(function (txt) {
+                    var body;
+                    try { body = isJson ? JSON.parse(txt || '{}') : {}; } catch (e) { body = { parse_error: e.message, raw: (txt || '').slice(0, 500) }; }
+                    if (!r.ok) {
+                        var msg = 'Aggregated results request failed (' + r.status + ') for session ' + id + '. URL: ' + url + '.';
+                        throw new Error(msg);
+                    }
+                    return Array.isArray(body.entries) ? body.entries
+                        : (body.megafile && Array.isArray(body.megafile.entries) ? body.megafile.entries : []);
+                });
+            })
+            .catch(function (err) {
+                console.warn('Aggregated: failed to fetch session', id, err);
+                return [];
+            })
+            .then(function (entries) {
+                var sorted = applySorting(entries);
+                // Save to both memory and sessionStorage; keeps single-session views instant later
+                saveCachedSessionEntries(id, sorted);
+                // Progressive aggregated append using current grid count
+                try { progressiveRenderAggregated(productsGrid.children.length); } catch (e) { console.error('Aggregated progressive step failed', e); }
+            })
+            .finally(function () {
+                remaining -= 1;
+            });
+    });
+}
+
   function scheduleReconnect(sessionId) {
-    var s = findSession(sessionId);
-    if (!s || s.status === 'completed' || s.status === 'failed') return;
-    var attempt = (streamRetries[sessionId] || 0) + 1;
-    streamRetries[sessionId] = attempt;
-    var delay = Math.min(15000, 500 * Math.pow(2, attempt - 1)); // 0.5s → 15s
-    setTimeout(function () {
-      attachStream(sessionId);
+  var s = findSession(sessionId);
+  if (!s || s.status === 'completed' || s.status === 'failed') return;
+  var attempt = (streamRetries[sessionId] || 0) + 1;
+  streamRetries[sessionId] = attempt;
+  var delay = Math.min(15000, 500 * Math.pow(2, attempt - 1)); // 0.5s → 15s
+  setTimeout(function () {
+    attachStream(sessionId);
       var selected = resultsSelect && resultsSelect.value;
       if (selected === '__all__') {
         loadAllSessionsResults();
-      } else if (String(selected) === String(sessionId)) {
-        loadSessionResults(sessionId, true);
       }
     }, delay);
-  }
+}
 
   // Polling fallback: merge status/progress from backend every 2s
   function pollOnce() {
-    fetch(window.BULK_RESEARCH_LIST_URL, { credentials: 'same-origin' })
-      .then(function (r) { return r.json().catch(function(){ return {}; }).then(function (j) { if (!r.ok) throw new Error(j && (j.error || ('Failed (' + r.status + ')'))); return j; }); })
-      .then(function (json) {
-        var arr = Array.isArray(json.sessions) ? json.sessions : [];
-        arr.forEach(function (remote) {
-          var local = findSession(remote.id);
-          if (!local) return;
-          var changed = false;
-          if (typeof remote.status === 'string' && remote.status !== local.status) {
-            local.status = remote.status;
-            changed = true;
-          }
-          if (remote.progress && typeof remote.progress === 'object') {
+  // Gate polling to only when any session is ongoing
+  var anyOngoing = Array.isArray(sessions) && sessions.some(function (s) { return String(s.status).toLowerCase() === 'ongoing'; });
+  if (!anyOngoing) return;
+
+  fetch(window.BULK_RESEARCH_LIST_URL, { credentials: 'same-origin' })
+    .then(function (r) { return r.json().catch(function(){ return {}; }).then(function (j) { if (!r.ok) throw new Error(j && (j.error || ('Failed (' + r.status + ')'))); return j; }); })
+    .then(function (json) {
+      var arr = Array.isArray(json.sessions) ? json.sessions : [];
+      arr.forEach(function (remote) {
+        var local = findSession(remote.id);
+        if (!local) return;
+        var changed = false;
+        if (typeof remote.status === 'string' && remote.status !== local.status) {
+          local.status = remote.status;
+          changed = true;
+        }
+        if (remote.progress && typeof remote.progress === 'object') {
             // Shallow merge per stage
             local.progress = local.progress || {};
             ['search','splitting','demand','keywords'].forEach(function (k) {
@@ -179,11 +458,21 @@
               }
             });
           }
-          if (changed) updateSession(local);
-        });
-      })
-      .catch(function () { /* silent */ });
-  }
+          if (typeof remote.entries_count === 'number' && remote.entries_count !== local.entries_count) {
+          local.entries_count = remote.entries_count;
+          changed = true;
+        }
+        // If remote says completed, normalize progress to full totals
+        if (String(local.status).toLowerCase() === 'completed') {
+          normalizeProgressForCompleted(local);
+          changed = true;
+        }
+        if (changed) updateSession(local);
+      });
+      updatePolling();
+    })
+    .catch(function () { /* silent */ });
+}
 
   function startPolling() {
     if (pollTimer) return;
@@ -191,39 +480,114 @@
     pollTimer = setInterval(pollOnce, POLL_INTERVAL_MS);
   }
   function stopPolling() {
-    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-  }
-  startPolling();
-  window.addEventListener('beforeunload', stopPolling);
-
-  // Keep listening when switching session
-  if (resultsSelect) {
-    resultsSelect.addEventListener('change', function () {
-        var val = resultsSelect.value;
-        productsGrid.innerHTML = '';
-        if (resultsBack) resultsBack.classList.add('hidden');
-        if (allSessionsController) { try { allSessionsController.abort(); } catch (_) {} allSessionsController = null; }
-
-        if (!val) {
-            showLoading(false);
-            resultsTitle.textContent = 'No session selected';
-            sessionStorage.removeItem(SELECT_STORAGE_KEY);
-            renderEmptyPrompt();
-            return;
-        }
-        sessionStorage.setItem(SELECT_STORAGE_KEY, val);
-        if (val === '__all__') {
-            resultsTitle.textContent = 'All Sessions — aggregated';
-            loadAllSessionsResults();
-        } else {
-            var s = findSession(val);
-            updateResultsTitleForSession(s);
-            attachStream(val);
-            loadSessionResults(val, true);
-        }
-    });
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
+// Dynamically start/stop polling based on active sessions
+function updatePolling() {
+    // Stop polling unless there’s a selected, ongoing session or “All” with any ongoing
+    var selected = (resultsSelect && resultsSelect.value) || '';
+    var shouldPoll = false;
 
+    if (selected === '__all__') {
+        shouldPoll = Array.isArray(sessions) && sessions.some(function (s) {
+            return String(s.status).toLowerCase() === 'ongoing';
+        });
+    } else if (selected) {
+        var sel = findSession(selected);
+        shouldPoll = !!(sel && String(sel.status).toLowerCase() === 'ongoing');
+    } else {
+        shouldPoll = false;
+    }
+
+    if (shouldPoll) {
+        if (!pollTimer) { pollOnce(); pollTimer = setInterval(pollOnce, POLL_INTERVAL_MS); }
+    } else {
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+}
+  // Auto-refresh controls for "All" aggregated mode
+function startAggregatedAutoRefresh() {
+    if (aggregatedRefreshTimer) return;
+    aggregatedRefreshTimer = setInterval(function () {
+        try {
+            if (!resultsSelect || resultsSelect.value !== '__all__') return;
+            // Only refresh when any session is ongoing
+            var anyOngoing = Array.isArray(sessions) && sessions.some(function (s) { return String(s.status).toLowerCase() === 'ongoing'; });
+            if (!anyOngoing) return;
+            loadAllSessionsResults();
+        } catch (e) {
+            console.warn('Aggregated auto refresh error', e);
+        }
+    }, AGG_REFRESH_INTERVAL_MS);
+}
+function stopAggregatedAutoRefresh() {
+    if (aggregatedRefreshTimer) { clearInterval(aggregatedRefreshTimer); aggregatedRefreshTimer = null; }
+}
+  updatePolling();
+
+    (function () {
+      if (window.__initDefaultAll) return;
+      window.__initDefaultAll = true;
+      if (!resultsSelect) return;
+      var current = (resultsSelect.value || sessionStorage.getItem(SELECT_STORAGE_KEY) || '');
+      if (current === '__all__') {
+        resultsTitle.textContent = 'All Sessions — aggregated';
+        upsertResultsSelect();
+        loadAllSessionsResults();
+        updatePolling();
+      }
+    })();
+window.addEventListener('beforeunload', stopPolling);
+    window.addEventListener('beforeunload', stopAggregatedAutoRefresh);
+
+  // resultsSelect change listener (first occurrence)
+if (resultsSelect && !window.__bulkResultsChangeInit) {
+    window.__bulkResultsChangeInit = true;
+    resultsSelect.addEventListener('change', function () {
+    var val = resultsSelect.value;
+    productsGrid.innerHTML = '';
+    if (resultsBack) resultsBack.classList.add('hidden');
+    if (allSessionsController) { try { allSessionsController.abort(); } catch (_) {} allSessionsController = null; }
+
+    if (!val) {
+        resultsTitle.textContent = 'No session selected';
+        sessionStorage.removeItem(SELECT_STORAGE_KEY);
+        stopAggregatedAutoRefresh();
+        renderEmptyPrompt();
+        updatePolling();
+        return;
+    }
+
+    sessionStorage.setItem(SELECT_STORAGE_KEY, val);
+
+    if (val === '__all__') {
+        resultsTitle.textContent = 'All Sessions — aggregated';
+        // Single aggregated load; no auto-refresh timer
+        loadAllSessionsResults();
+    } else {
+        var s = findSession(val);
+        updateResultsTitleForSession(s);
+        stopAggregatedAutoRefresh();
+        attachStream(val);
+
+        var isCompleted = s && String(s.status).toLowerCase() === 'completed';
+        if (isCompleted) {
+            loadSessionResults(val, true);
+        } else {
+            var cached = getCachedSessionEntries(val);
+            if (Array.isArray(cached) && cached.length) {
+                try { renderProductsGrid(applySorting(cached)); } catch (e) { console.error('Render cached failed', e); }
+            } else {
+                showLoading(false);
+                try { renderProductsGrid([]); } catch (_) {}
+            }
+        }
+    }
+
+    // Re-evaluate polling based on the selection
+    updatePolling();
+});
+}
     // Generalized metric accessor (now supports Demand).
   function metricValueOf(entry, metric) {
     switch (String(metric || '').toLowerCase()) {
@@ -304,6 +668,9 @@
   }
 function fmtDateISO(iso) {
   try { return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); } catch (_) { return iso || ''; }
+}
+function fmtTimeISO(iso) {
+  try { return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }); } catch (_) { return ''; }
 }
 // Centered loading icon (black & white, theme-aware)
 var __resultsLoadingFlag = false;
@@ -497,36 +864,46 @@ window.addEventListener('keydown', function (e) {
       return body;
     });
   }).then(function () {
-    // Close any active stream for this session
-    try { if (streams[sessionId]) { streams[sessionId].close(); } } catch (_) {}
-    delete streams[sessionId];
+        // Close any active stream for this session
+        try { if (streams[sessionId]) { streams[sessionId].close(); } } catch (_) {}
+        delete streams[sessionId];
 
-    // Drop caches and counts
-    delete sessionResultsCache[sessionId];
-    delete sessionCounts[sessionId];
+        // Drop caches and counts (memory + sessionStorage)
+        delete sessionResultsCache[sessionId];
+        delete sessionCounts[sessionId];
+        removeSessionCachedEntries(sessionId);
 
-    // Remove from in-memory list
-    sessions = sessions.filter(function (x) { return String(x.id) !== String(sessionId); });
+        // Remove from in-memory list
+        sessions = sessions.filter(function (x) { return String(x.id) !== String(sessionId); });
 
-    // If currently viewing this session, clear selection and grid
-    if (resultsSelect && String(resultsSelect.value) === String(sessionId)) {
-      resultsSelect.value = '';
-      if (resultsBack) resultsBack.classList.add('hidden');
-      resultsTitle.textContent = 'No session selected';
-      productsGrid.innerHTML = '';
-    } else if (resultsSelect && resultsSelect.value === '__all__') {
-      // Keep aggregated view current
-      loadAllSessionsResults();
-    } else {
-      upsertResultsSelect();
-    }
+        // If currently viewing this session, fallback appropriately
+        if (resultsSelect && String(resultsSelect.value) === String(sessionId)) {
+            var hasAnySessions = Array.isArray(sessions) && sessions.length > 0;
+            if (hasAnySessions) {
+                resultsSelect.value = '__all__';
+                sessionStorage.setItem(SELECT_STORAGE_KEY, '__all__');
+                if (resultsBack) resultsBack.classList.add('hidden');
+                resultsTitle.textContent = 'All Sessions — aggregated';
+                loadAllSessionsResults();
+            } else {
+                resultsSelect.value = '';
+                if (resultsBack) resultsBack.classList.add('hidden');
+                resultsTitle.textContent = 'No session selected';
+                productsGrid.innerHTML = '';
+                stopAggregatedAutoRefresh();
+            }
+        } else if (resultsSelect && resultsSelect.value === '__all__') {
+            // Keep aggregated view current
+            loadAllSessionsResults();
+        } else {
+            upsertResultsSelect();
+        }
 
-    // Re-render sessions list
-    renderSessionsList();
+        // Re-render sessions list
+        renderSessionsList();
 
-    // Success toast
-    showToast('Session deleted.', 'success');
-  }).catch(function (err) {
+        showToast('Session deleted.', 'success');
+    }).catch(function (err) {
     // Error toast instead of alert
     showToast('Delete failed: ' + err.message, 'error');
   }).finally(function () {
@@ -582,71 +959,121 @@ window.addEventListener('keydown', function (e) {
       return;
     }
     sessions.forEach(function (s) {
-    var item = document.createElement('article');
-    item.className = 'session-row';
-    item.setAttribute('data-session-id', s.id);
+        var item = document.createElement('article');
+        item.className = 'session-row';
+        item.setAttribute('data-session-id', s.id);
 
-    var created = fmtDateISO(s.created_at);
-    item.innerHTML =
-      '<div class="row-line">' +
-      '  <div class="row-title">' + escapeHtml(s.keyword) + '</div>' +
-      '  <div class="row-meta">Desired: ' + (s.desired_total || 0) + ' • Started: ' + created + '</div>' +
-      '</div>' +
-      '<div class="row-progress">' +
-      progressLine('Search', s.progress && s.progress.search, s) +
-      progressLine('Splitting', s.progress && s.progress.splitting, s) +
-      progressLine('Demand', s.progress && s.progress.demand, s) +
-      progressLine('Keywords', s.progress && s.progress.keywords, s) +
-      '</div>' +
-      '<div class="row-status">Status: <span class="status-tag ' + s.status + '">' + s.status + '</span></div>' +
-      '<div class="row-actions">' +
-      // Insert disabled attrs/classes at render time for ongoing sessions
-      '  <button class="link-btn view-results' + (String(s.status).toLowerCase() === 'ongoing' ? ' is-disabled' : '') + '"' +
-      '          data-view="' + s.id + '"' +
-      (String(s.status).toLowerCase() === 'ongoing' ? ' disabled aria-disabled="true" title="Results available after session completes"' : '') +
-      '  >View Results</button>' +
-      '  <button class="link-btn delete-session ml-2" data-delete="' + s.id + '">Delete</button>' +
-      '</div>';
+        var created = fmtDateISO(s.created_at);
+        var isCompleted = String(s.status || '').toLowerCase() === 'completed';
 
-    var btn = item.querySelector('.view-results');
-    if (btn) {
-      btn.addEventListener('click', function (e) {
-        e.stopPropagation();
-        // Defensive: re-check latest status to avoid races
-        var latest = findSession(s.id) || s;
-        if (String(latest.status || '').toLowerCase() === 'ongoing' || btn.disabled || btn.classList.contains('is-disabled')) {
-          e.preventDefault();
-          showToast('Results available after session completes.', 'error');
-          return;
+        // Hide Reconnect entirely once completed
+        var showReconnect = !isCompleted;
+        var live = (String(s.status).toLowerCase() === 'ongoing') && isStreamAlive(s.id);
+
+        // Make View Results clickable as soon as status is completed
+        var canView = isCompleted;
+
+        item.innerHTML =
+          '<div class="session-header flex items-center justify-between gap-2">' +
+          '  <button class="toggle-details text-xs px-1 py-0.5 mr-2" aria-expanded="' + (!isCompleted) + '" aria-label="Toggle details">' + (isCompleted ? '▸' : '▾') + '</button>' +
+          '  <div class="flex items-center gap-2 flex-1 min-w-0">' +
+          '    <div class="row-title truncate text-sm font-medium" title="' + escapeHtml(s.keyword) + '">' + escapeHtml(s.keyword) + '</div>' +
+          '    <div class="row-meta text-xs text-[var(--muted)]">Desired: ' + (s.desired_total || 0) + ' • Started: ' + created + '</div>' +
+          '  </div>' +
+          '  <div class="row-actions flex items-center gap-2 text-xs">' +
+          '    <button class="link-btn text-xs view-results' + (!canView ? ' is-disabled' : '') + '"' +
+          '            data-view="' + s.id + '"' +
+          (!canView ? ' disabled aria-disabled="true" title="Results available after completion"' : '') +
+          '    >View Results</button>' +
+          (showReconnect ? ('    <button class="link-btn text-xs reconnect-session ml-2" data-reconnect="' + s.id + '"' +
+          (live ? ' title="Live updating — reconnect disabled"' : '') + '>Reconnect</button>') : '') +
+          '    <button class="link-btn text-xs delete-session ml-2" data-delete="' + s.id + '">Delete</button>' +
+          '  </div>' +
+          '</div>' +
+          '<div class="session-details' + (isCompleted ? ' hidden' : '') + '">' +
+          '  <div class="text-xs"><span class="text-[var(--muted)]">Keyword</span>: <span class="break-words whitespace-normal">' + escapeHtml(s.keyword) + '</span></div>' +
+          '  <div class="row-progress mt-1">' +
+               progressLine('Search', s.progress && s.progress.search, s) +
+               progressLine('Splitting', s.progress && s.progress.splitting, s) +
+               progressLine('Demand', s.progress && s.progress.demand, s) +
+               progressLine('Keywords', s.progress && s.progress.keywords, s) +
+          '  </div>' +
+          '  <div class="row-status mt-1">Status: <span class="status-tag ' + s.status + '">' + s.status + '</span></div>' +
+          '</div>';
+
+        // Toggle collapse/expand with arrow
+        var toggle = item.querySelector('.toggle-details');
+        var details = item.querySelector('.session-details');
+        if (toggle && details) {
+          toggle.addEventListener('click', function (e) {
+            e.preventDefault();
+            e.stopPropagation();
+            var collapsed = details.classList.contains('hidden');
+            if (collapsed) {
+              details.classList.remove('hidden');
+              toggle.textContent = '▾';
+              toggle.setAttribute('aria-expanded', 'true');
+            } else {
+              details.classList.add('hidden');
+              toggle.textContent = '▸';
+              toggle.setAttribute('aria-expanded', 'false');
+            }
+          });
         }
-        closeSessionsPanel();
-        resultsSelect.value = String(latest.id);
-        updateResultsTitleForSession(latest);
-        loadSessionResults(latest.id, true);
-      });
-    }
 
-    var delBtn = item.querySelector('.delete-session');
-    if (delBtn) {
-      if (String(s.status).toLowerCase() === 'ongoing') {
-        delBtn.disabled = true;
-        delBtn.title = 'Cannot delete while session is ongoing';
-        delBtn.setAttribute('aria-disabled', 'true');
-        delBtn.classList.add('is-disabled');
-      }
-      delBtn.addEventListener('click', function (e) {
-        e.stopPropagation();
-        if (delBtn.disabled || delBtn.classList.contains('is-disabled')) return;
-        showConfirmDelete(s).then(function (confirmed) {
-          if (!confirmed) return;
-          deleteSession(s.id);
+        // Bind View Results only when eligible
+        var btn = item.querySelector('.view-results');
+        if (btn) {
+          if (canView) {
+            btn.addEventListener('click', function (e) {
+              e.stopPropagation();
+              closeSessionsPanel();
+              resultsSelect.value = String(s.id);
+              updateResultsTitleForSession(s);
+              // Fast render or revalidate; works immediately after completion
+              loadSessionResults(s.id, true);
+            });
+          } else {
+            // keep disabled; no handler bound
+          }
+        }
+
+        // Delete: do not bind when ongoing, keep disabled
+        var delBtn = item.querySelector('.delete-session');
+        if (delBtn) {
+          var isOngoing = String(s.status).toLowerCase() === 'ongoing';
+          if (isOngoing) {
+            delBtn.disabled = true;
+            delBtn.title = 'Cannot delete while session is ongoing';
+            delBtn.setAttribute('aria-disabled', 'true');
+            delBtn.classList.add('is-disabled');
+          } else {
+            delBtn.addEventListener('click', function (e) {
+              e.stopPropagation();
+              if (delBtn.disabled || delBtn.classList.contains('is-disabled')) return;
+              showConfirmDelete(s).then(function (confirmed) {
+                if (!confirmed) return;
+                deleteSession(s.id);
+              });
+            });
+          }
+        }
+
+        var reconBtn = item.querySelector('.reconnect-session');
+    if (reconBtn) {
+        reconBtn.addEventListener('click', function (e) {
+            e.preventDefault();
+            if (isStreamAlive(s.id)) {
+                showToast('Already receiving live updates — reconnect disabled.', 'error');
+                return;
+            }
+            reconnectSession(s.id, reconBtn);
         });
-      });
     }
 
-    sessionsList.appendChild(item);
-  });
-  }
+        sessionsList.appendChild(item);
+    });
+}
 
   function progressLine(name, obj, session) {
     var total = (obj && typeof obj.total === 'number' && isFinite(obj.total))
@@ -678,18 +1105,29 @@ window.addEventListener('keydown', function (e) {
     if (typeof data.status === 'string') s.status = data.status;
     if (data.progress && typeof data.progress === 'object') {
       s.progress = data.progress;
+      // Normalize progress if snapshot says completed
+      if (String(s.status).toLowerCase() === 'completed') {
+        normalizeProgressForCompleted(s, data.entries_count);
+      }
       updateSession(s);
     }
     var ec = data.entries_count;
     if (typeof ec === 'number' && isFinite(ec)) {
       sessionCounts[sessionId] = ec;
       upsertResultsSelect();
+
+      // Only refresh results if snapshot indicates completion
+      var statusLower = String(data.status || '').toLowerCase();
       var selected = resultsSelect && resultsSelect.value;
-      if (ec > 0 && (String(selected) === String(sessionId) || selected === '__all__')) {
-        // Fetch now so products render immediately
-        try { loadSessionResults(sessionId, selected !== '__all__'); } catch (e) { alert('Snapshot-triggered load failed: ' + e.message); }
-      } else if (ec === 0) {
-        console.info('Snapshot indicates 0 products yet for session', sessionId, '— upstream may still be processing.');
+      if (statusLower === 'completed' && ec > 0) {
+        try {
+          if (selected === '__all__') {
+            loadAllSessionsResults();
+          } else {
+            var shouldRenderNow = (String(selected) === String(sessionId));
+            loadSessionResults(sessionId, shouldRenderNow);
+          }
+        } catch (e) { alert('Snapshot refresh failed: ' + e.message); }
       }
     } else {
       console.warn('Snapshot missing/invalid entries_count for session', sessionId, data);
@@ -707,28 +1145,82 @@ window.addEventListener('keydown', function (e) {
     updateSession(s);
   }
 
-  // If stream mentions entries/megafile, refresh results
-  var hasEntriesFlag = (Array.isArray(data.entries) && data.entries.length > 0) ||
-                       (data.megafile && Array.isArray(data.megafile.entries) && data.megafile.entries.length > 0);
-  if (hasEntriesFlag) {
-    var isAggregated = (resultsSelect && resultsSelect.value === '__all__');
+  // Refresh products only on completion
+  if (stage === 'completed') {
+    s.status = 'completed';
+    // Normalize progress to show done totals
+    normalizeProgressForCompleted(s, data && typeof data.entries_count === 'number' ? data.entries_count : undefined);
+    updateSession(s);
+    var selected = resultsSelect && resultsSelect.value;
     try {
-      if (isAggregated) {
+      if (selected === '__all__') {
         loadAllSessionsResults();
-      } else {
-        loadSessionResults(sessionId, String(resultsSelect.value) === String(sessionId));
+      } else if (String(selected) === String(sessionId)) {
+        loadSessionResults(sessionId, true);
       }
     } catch (e) {
-      alert('Stream-triggered results refresh failed: ' + e.message);
+      alert('Refresh after completion failed: ' + e.message);
       console.error('Refresh error', e, data);
     }
   }
-
-  if (stage === 'completed') {
-    s.status = 'completed';
-    updateSession(s);
-  }
 }
+
+// Ensure completed sessions show full done totals (no leftovers)
+function normalizeProgressForCompleted(session, entriesCountMaybe) {
+  var s = session || {};
+  var desired = (s && typeof s.desired_total === 'number') ? s.desired_total : 0;
+  var ecKnown = (typeof entriesCountMaybe === 'number' && isFinite(entriesCountMaybe)) ? entriesCountMaybe : null;
+  var cachedCount = (sessionCounts && sessionCounts[session.id]) || null;
+  var ec = (ecKnown != null) ? ecKnown : (typeof cachedCount === 'number' ? cachedCount : null);
+
+  s.progress = s.progress || {};
+  // Search — total = desired_total, remaining = 0
+  var pSearch = s.progress.search || {};
+  pSearch.total = (typeof desired === 'number' && desired > 0) ? desired : (pSearch.total || 0);
+  pSearch.remaining = 0;
+  s.progress.search = pSearch;
+
+  // Splitting — preserve total if any, remaining = 0 (defaults to 2)
+  var pSplit = s.progress.splitting || {};
+  var splitTotal = (typeof pSplit.total === 'number' && pSplit.total > 0) ? pSplit.total : 2;
+  pSplit.total = splitTotal;
+  pSplit.remaining = 0;
+  s.progress.splitting = pSplit;
+
+  // Demand — total = entries_count if known, remaining = 0
+  var pDemand = s.progress.demand || {};
+  var demandTotal = (ec != null) ? Math.max(pDemand.total || 0, ec) : (pDemand.total || 0);
+  pDemand.total = demandTotal;
+  pDemand.remaining = 0;
+  s.progress.demand = pDemand;
+
+  // Keywords — keep discovered total, remaining = 0
+  var pKeywords = s.progress.keywords || {};
+  pKeywords.total = (typeof pKeywords.total === 'number' ? pKeywords.total : 0);
+  pKeywords.remaining = 0;
+  s.progress.keywords = pKeywords;
+}
+
+function isProgressFull(progress) {
+  var p = progress || {};
+  function full(stage) {
+    var st = p[stage] || {};
+    return typeof st.remaining === 'number' && st.remaining === 0;
+  }
+  return full('search') && full('splitting') && full('demand') && full('keywords');
+}
+
+function hasCachedResults(sessionId) {
+  var inMem = sessionResultsCache[sessionId];
+  if (Array.isArray(inMem) && inMem.length > 0) return true;
+  var hydrated = getCachedSessionEntries(sessionId);
+  return Array.isArray(hydrated) && hydrated.length > 0;
+}
+
+function isSessionFullyCompleted(s) {
+  return String(s.status).toLowerCase() === 'completed' && isProgressFull(s.progress);
+}
+
   function mapStage(stage) {
     if (stage === 'search') return 'search';
     if (stage === 'splitting') return 'splitting';
@@ -738,80 +1230,129 @@ window.addEventListener('keydown', function (e) {
   }
   function findSession(id) { return sessions.find(function (x) { return String(x.id) === String(id); }); }
   function updateSession(updated) {
-    var idx = sessions.findIndex(function (x) { return String(x.id) === String(updated.id); });
-    if (idx !== -1) sessions[idx] = updated;
-    renderSessionsList();
-    upsertResultsSelect();
-  }
+  var idx = sessions.findIndex(function (x) { return String(x.id) === String(updated.id); });
+  if (idx !== -1) sessions[idx] = updated;
+  renderSessionsList();
+  upsertResultsSelect();
+  // Keep polling state in sync with session statuses
+  updatePolling();
+}
 
   // Results
   function upsertResultsSelect() {
     if (!resultsSelect) return;
+
+    // Preserve whatever is currently selected or saved
     var current = resultsSelect.value || sessionStorage.getItem(SELECT_STORAGE_KEY) || '';
-  resultsSelect.innerHTML = '';
 
-  var optDefault = document.createElement('option');
-  optDefault.value = '';
-  optDefault.textContent = 'Select...';
-  resultsSelect.appendChild(optDefault);
+    // Rebuild the select
+    resultsSelect.innerHTML = '';
 
-  // Aggregated option with known total if available
-  var optAll = document.createElement('option');
-  optAll.value = '__all__';
-  var totalKnown = Object.keys(sessionCounts).reduce(function (acc, id) {
-    var c = sessionCounts[id];
-    return acc + (typeof c === 'number' ? c : 0);
-  }, 0);
-  optAll.textContent = totalKnown > 0
-    ? ('All Sessions — aggregated • ' + totalKnown + ' products')
-    : 'All Sessions — aggregated';
-  resultsSelect.appendChild(optAll);
+    // Only show the empty 'Select...' option when there are no sessions at all
+    var hasAnySessions = Array.isArray(sessions) && sessions.length > 0;
+    if (!hasAnySessions) {
+        var optDefault = document.createElement('option');
+        optDefault.value = '';
+        optDefault.textContent = 'Select...';
+        resultsSelect.appendChild(optDefault);
+    }
 
-  sessions.forEach(function (s) {
-    var o = document.createElement('option');
-    o.value = String(s.id);
-    var created = fmtDateISO(s.created_at);
-    var count = (typeof sessionCounts[s.id] === 'number') ? sessionCounts[s.id] : null;
-    var txt = s.keyword + ' (' + created + ')';
-    if (count !== null) txt += ' • ' + count + ' products';
-    o.textContent = txt;
-    resultsSelect.appendChild(o);
-  });
+    // Aggregated option with known total if available
+    var optAll = document.createElement('option');
+    optAll.value = '__all__';
+    var totalKnown = Object.keys(sessionCounts).reduce(function (acc, id) {
+        var c = sessionCounts[id];
+        return acc + (typeof c === 'number' ? c : 0);
+    }, 0);
+    optAll.textContent = totalKnown > 0
+        ? ('All Sessions — aggregated • ' + totalKnown + ' products')
+        : 'All Sessions — aggregated';
+    optAll.title = 'Aggregated results from all sessions';
+    resultsSelect.appendChild(optAll);
 
-  var hasValue = Array.prototype.some.call(resultsSelect.options, function (opt) { return opt.value === current; });
-  if (hasValue) resultsSelect.value = current;
-  }
+    // Include all sessions (ongoing and completed), so user can switch freely
+    sessions.forEach(function (s) {
+        var o = document.createElement('option');
+        o.value = String(s.id);
 
-  if (resultsSelect) {
+        var created = fmtDateISO(s.created_at);
+        var status = (s && s.status) ? String(s.status).toLowerCase() : '';
+        var count = (typeof sessionCounts[s.id] === 'number') ? sessionCounts[s.id] : null;
+
+        var txt = s.keyword + ' (' + created + ')';
+        // Removed: if (status === 'ongoing') txt += ' • ongoing';
+        if (count !== null) txt += ' • ' + count + ' products';
+
+        o.textContent = txt;
+        o.title = s.keyword; // show full keyword on hover
+        resultsSelect.appendChild(o);
+    });
+
+    // Keep selection stable if it exists in the rebuilt list
+    var hasDesired = Array.prototype.some.call(resultsSelect.options, function (opt) { return opt.value === current; });
+    if (hasDesired) {
+        resultsSelect.value = current;
+    } else {
+        // Do NOT force '__all__' here; leave selection unchanged.
+        // Initial defaulting to aggregated is handled in the bootstrap/restoreSelection flow.
+    }
+}
+
+  // resultsSelect change listener (second occurrence)
+if (resultsSelect && !window.__bulkResultsChangeInit) {
+    window.__bulkResultsChangeInit = true;
     resultsSelect.addEventListener('change', function () {
-      var val = resultsSelect.value;
-      productsGrid.innerHTML = '';
-      // Always hide header back button when switching context
-      if (resultsBack) resultsBack.classList.add('hidden');
+    var val = resultsSelect.value;
+    productsGrid.innerHTML = '';
+    if (resultsBack) resultsBack.classList.add('hidden');
+    if (allSessionsController) { try { allSessionsController.abort(); } catch (_) {} allSessionsController = null; }
 
-      // Cancel any aggregated fetch in progress
-      if (allSessionsController) {
-        try { allSessionsController.abort(); } catch (_) {}
-        allSessionsController = null;
-      }
-
-      if (!val) {
+    if (!val) {
+        var hasAnySessions = Array.isArray(sessions) && sessions.length > 0;
+        if (hasAnySessions) {
+            resultsSelect.value = '__all__';
+            sessionStorage.setItem(SELECT_STORAGE_KEY, '__all__');
+            resultsTitle.textContent = 'All Sessions — aggregated';
+            loadAllSessionsResults();
+            updatePolling();
+            return;
+        }
         resultsTitle.textContent = 'No session selected';
         sessionStorage.removeItem(SELECT_STORAGE_KEY);
+        stopAggregatedAutoRefresh();
         renderEmptyPrompt();
+        updatePolling();
         return;
-      }
-      sessionStorage.setItem(SELECT_STORAGE_KEY, val);
-      if (val === '__all__') {
+    }
+
+    sessionStorage.setItem(SELECT_STORAGE_KEY, val);
+
+    if (val === '__all__') {
         resultsTitle.textContent = 'All Sessions — aggregated';
-        loadAllSessionsResults(); // new robust aggregator
-      } else {
+        loadAllSessionsResults();
+    } else {
         var s = findSession(val);
         updateResultsTitleForSession(s);
-        loadSessionResults(val, true);
-      }
-    });
-  }
+        stopAggregatedAutoRefresh();
+        attachStream(val);
+
+        var isCompleted = s && String(s.status).toLowerCase() === 'completed';
+        if (isCompleted) {
+            loadSessionResults(val, true);
+        } else {
+            var cached = getCachedSessionEntries(val);
+            if (Array.isArray(cached) && cached.length) {
+                try { renderProductsGrid(applySorting(cached)); } catch (e) { console.error('Render cached failed', e); }
+            } else {
+                showLoading(false);
+                try { renderProductsGrid([]); } catch (_) {}
+            }
+        }
+    }
+
+    updatePolling();
+});
+}
 
   function showToast(message, type) {
   var container = document.getElementById('toast-container');
@@ -946,155 +1487,333 @@ function showConfirmDelete(session) {
   }
 
   function loadSessionResults(sessionId, renderNow) {
-  showLoading(true, 'Loading products…');
+  // Use cache first for instant switching
+  var s = findSession(sessionId);
+  var isCompleted = s && String(s.status).toLowerCase() === 'completed';
+  var baseUrl = window.BULK_RESEARCH_RESULT_URL_BASE + sessionId + '/';
+  var fastUrl = baseUrl + '?limit=8';
 
-  var url = window.BULK_RESEARCH_RESULT_URL_BASE + sessionId + '/';
-    return fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
-      .then(function (r) {
-        var isJson = ((r.headers.get('Content-Type') || '').toLowerCase().indexOf('application/json') !== -1);
-        return r.text().then(function (txt) {
-          var body;
-          try { body = isJson ? JSON.parse(txt || '{}') : {}; } catch (e) { body = { parse_error: e.message, raw: (txt || '').slice(0, 500) }; }
-          if (!r.ok) {
-            var msg = 'Results request failed (' + r.status + '). ' +
-                      'URL: ' + url + '. ' +
-                      (body && body.error ? ('Error: ' + (body.error.message || body.error)) : 'No error message from server.');
-            throw new Error(msg);
-          }
-          return body;
-        });
-      })
-      .then(function (json) {
-        console.debug('Result JSON for session', sessionId, {
-          url: url,
-          status: json && json.status,
-          source: json && json.source,
-          keys: Object.keys(json || {}),
-          entriesType: (json && json.entries != null) ? Object.prototype.toString.call(json.entries) : 'undefined',
-          entries_count: json && json.entries_count,
-          length_inferred: Array.isArray(json && json.entries) ? json.entries.length : 0
-        });
-
-        var entries = [];
-        if (Array.isArray(json.entries)) {
-          entries = json.entries;
-        } else if (json.megafile && Array.isArray(json.megafile.entries)) {
-          entries = json.megafile.entries;
-        } else {
-          var keys = Object.keys(json || {});
-          var type = (json && json.entries != null) ? (Object.prototype.toString.call(json.entries)) : 'undefined';
-          alert('Invalid result shape for session ' + sessionId +
-                '. Expected "entries" array; got ' + type +
-                '. Keys: ' + keys.join(', '));
-          console.error('Bad result JSON', json);
-          entries = [];
-        }
-
-        if ((json && json.source === 'none') && (json && json.status === 'ongoing') && entries.length === 0) {
-          console.info('Session', sessionId, 'still streaming; no snapshot or DB result yet.');
-        }
-
-        sessionResultsCache[sessionId] = entries;
-        sessionCounts[sessionId] = entries.length;
-        upsertResultsSelect();
-        lastEntriesRaw = entries;
-
-        if (entries.length === 0) {
-          console.info('Results loaded, but no products yet for session', sessionId,
-                       '— upstream may still be processing or entries not emitted as an array.');
-        }
-
-        if (renderNow) {
-          try { renderProductsGrid(applySorting(entries)); }
-          catch (e) {
-            alert('Rendering products failed: ' + e.message);
-            console.error('Rendering error', e, entries);
-          }
-        }
-      })
-      .catch(function (err) {
-        // Suppress noisy alerts on aborted/transient network fetches
-        var msg = (err && err.message) || '';
-        var isAbort = err && (err.name === 'AbortError');
-        var isTransient = /Failed to fetch|NetworkError|load failed/i.test(msg);
-        if (isAbort || isTransient) {
-          console.info('Results request aborted or transient issue for session', sessionId, err);
-          return;
-        }
-        alert('Failed to load results: ' + msg);
-        console.error('Results load failed for session', sessionId, err);
-      })
-      .finally(function () { showLoading(false); restoreScroll(); });
-}
-  function loadAllSessionsResults() {
-  showLoading(true, 'Loading all sessions…');
-
-  // Abort any previous aggregated request
-  if (allSessionsController) {
-    try { allSessionsController.abort(); } catch (_) {}
-  }
-  allSessionsController = new AbortController();
-  var signal = allSessionsController.signal;
-
-  var ids = sessions.map(function (s) { return s && s.id; }).filter(Boolean);
-  if (ids.length === 0) {
-    lastEntriesRaw = [];
-    currentViewEntries = [];
-    renderProductsGrid([]);
-    upsertResultsSelect();
-    showLoading(false);
-    return;
+  // Helper: normalize result JSON to an entries array
+  function extractEntries(json) {
+    if (Array.isArray(json.entries)) return json.entries;
+    if (json.megafile && Array.isArray(json.megafile.entries)) return json.megafile.entries;
+    return [];
   }
 
-  // Render immediately from whatever cache we have
-  try { renderAggregatedFromCache(); } catch (e) { console.error('Render aggregated from cache failed', e); }
+  var cached = getCachedSessionEntries(sessionId);
+    if (Array.isArray(cached) && cached.length > 0) {
+      // Immediate render from cache; no spinner
+      var sortedCached = applySorting(cached);
+      if (renderNow) {
+        try { renderProductsGrid(sortedCached); } catch (e) { console.error('Render cached failed', e); }
+        restoreScroll();
+      } else if (resultsSelect && resultsSelect.value === '__all__') {
+        try { renderAggregatedFromCache(); } catch (e) { console.error('Aggregated cached render failed', e); }
+      }
 
-  // Fetch any sessions missing cache and progressively update the grid
-  var remaining = 0;
-  ids.forEach(function (id) {
-    if (Array.isArray(sessionResultsCache[id])) {
-      sessionCounts[id] = sessionResultsCache[id].length;
-      return;
+      // Smart revalidate if cache looks incomplete (e.g., missing price fields)
+      var cachedLooksIncomplete = false;
+      try {
+        var probeMax = Math.min(cached.length, 10);
+        for (var ci = 0; ci < probeMax; ci++) {
+          var ce = cached[ci] || {};
+          var hasDisplay = !!(ce.price_display && String(ce.price_display).trim());
+          var hasAmountDiv = (typeof ce.price_amount === 'number' && typeof ce.price_divisor === 'number' && ce.price_divisor);
+          var hasValue = (typeof ce.price_value === 'number' && isFinite(ce.price_value));
+          if (!hasDisplay && !hasAmountDiv && !hasValue) { cachedLooksIncomplete = true; break; }
+        }
+      } catch (_) {}
+
+      // Quiet revalidate if session is ongoing OR cache is incomplete
+      if (!isCompleted || cachedLooksIncomplete) {
+        fetch(baseUrl, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+          .then(function (r) {
+            var isJson = ((r.headers.get('Content-Type') || '').toLowerCase().indexOf('application/json') !== -1);
+            return r.text().then(function (txt) {
+              var body;
+              try { body = isJson ? JSON.parse(txt || '{}') : {}; } catch (e) { body = {}; }
+              if (!r.ok) throw new Error('Background refresh failed (' + r.status + ')');
+              return body;
+            });
+          })
+          .then(function (json) {
+            var fullEntries = extractEntries(json);
+            var sortedFull = applySorting(fullEntries);
+            saveCachedSessionEntries(sessionId, sortedFull);
+
+            var isSelected = resultsSelect && String(resultsSelect.value) === String(sessionId);
+            if (renderNow && isSelected) {
+              try { progressiveRenderSession(sessionId, sortedFull, productsGrid.children.length); }
+              catch (e) { console.warn('Progressive render fallback', e); renderProductsGrid(sortedFull); }
+            } else if (resultsSelect && resultsSelect.value === '__all__') {
+              try { renderAggregatedFromCache(); } catch (e) { console.error('Re-render aggregated after cache update failed', e); }
+            }
+          })
+          .catch(function (err) { console.info('Quiet revalidate skipped/failed for session', sessionId, err && err.message); });
+      }
+      return Promise.resolve(); // Done via cache path
     }
-    remaining += 1;
 
-    var url = window.BULK_RESEARCH_RESULT_URL_BASE + id + '/';
-    fetch(url, { credentials: 'same-origin', signal: signal, headers: { 'Accept': 'application/json' } })
-      .then(function (r) {
-        var isJson = ((r.headers.get('Content-Type') || '').toLowerCase().indexOf('application/json') !== -1);
-        return r.text().then(function (txt) {
-          var body;
-          try { body = isJson ? JSON.parse(txt || '{}') : {}; } catch (e) { body = { parse_error: e.message, raw: (txt || '').slice(0, 500) }; }
-          if (!r.ok) {
-            var msg = 'Aggregated results request failed (' + r.status + ') for session ' + id + '. ' +
-                      'URL: ' + url + '. ' +
-                      (body && body.error ? ('Error: ' + (body.error.message || body.error)) : 'No error message from server.');
-            throw new Error(msg);
-          }
-          return Array.isArray(body.entries) ? body.entries
-               : (body.megafile && Array.isArray(body.megafile.entries) ? body.megafile.entries : []);
-        });
-      })
-      .catch(function (err) {
-        console.warn('Aggregated: failed to fetch session', id, err);
-        return [];
-      })
-      .then(function (entries) {
-        sessionResultsCache[id] = entries;
-        sessionCounts[id] = entries.length;
-        try { renderAggregatedFromCache(); } catch (e) { console.error('Re-render aggregated failed', e); }
-      })
-      .finally(function () {
-        remaining -= 1;
-        if (remaining <= 0) { showLoading(false); }
+  if (isCompleted) {
+    showLoading(true, 'Loading top products…');
+  } else {
+    // Do not show spinner for ongoing sessions
+    showLoading(false);
+  }
+
+  return fetch(fastUrl, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+    .then(function (r) {
+      var isJson = ((r.headers.get('Content-Type') || '').toLowerCase().indexOf('application/json') !== -1);
+      return r.text().then(function (txt) {
+        var body;
+        try { body = isJson ? JSON.parse(txt || '{}') : {}; } catch (e) { body = { parse_error: e.message, raw: (txt || '').slice(0, 500) }; }
+        if (!r.ok) {
+          var msg = 'Results request failed (' + r.status + '). URL: ' + fastUrl;
+          throw new Error(msg);
+        }
+        return body;
       });
+    })
+    .then(function (json) {
+      var entries = extractEntries(json);
+      var fastSorted = applySorting(entries).slice(0, 8);
+
+      saveCachedSessionEntries(sessionId, fastSorted);
+
+      if (renderNow) {
+        try { renderProductsGrid(fastSorted); } catch (e) { alert('Rendering products failed: ' + e.message); console.error('Rendering error', e, fastSorted); }
+      } else if (resultsSelect && resultsSelect.value === '__all__') {
+        try { renderAggregatedFromCache(); } catch (e) { console.error('Re-render aggregated after cache update failed', e); }
+      }
+
+      showLoading(false);
+      restoreScroll();
+    })
+    .catch(function (err) {
+      var msg = (err && err.message) || '';
+      var isAbort = err && (err.name === 'AbortError');
+      var isTransient = /Failed to fetch|NetworkError|load failed/i.test(msg);
+      if (isAbort || isTransient) {
+        console.info('Fast results request aborted/transient for session', sessionId, err);
+        showLoading(false);
+        return;
+      }
+      showLoading(false);
+      alert('Failed to load results: ' + msg);
+      console.error('Results load failed (fast) for session', sessionId, err);
+    })
+    .then(function () {
+      // Background full load (no spinner)
+      return fetch(baseUrl, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+        .then(function (r) {
+          var isJson = ((r.headers.get('Content-Type') || '').toLowerCase().indexOf('application/json') !== -1);
+          return r.text().then(function (txt) {
+            var body;
+            try { body = isJson ? JSON.parse(txt || '{}') : {}; } catch (e) { body = { parse_error: e.message, raw: (txt || '').slice(0, 500) }; }
+            if (!r.ok) {
+              var msg = 'Results request failed (' + r.status + ') (background). URL: ' + baseUrl;
+              throw new Error(msg);
+            }
+            return body;
+          });
+        })
+        .then(function (json) {
+          var fullEntries = extractEntries(json);
+          var fullSorted = applySorting(fullEntries);
+
+          saveCachedSessionEntries(sessionId, fullSorted);
+
+          var isSelected = resultsSelect && String(resultsSelect.value) === String(sessionId);
+          if (renderNow && isSelected) {
+            try { progressiveRenderSession(sessionId, fullSorted, productsGrid.children.length); }
+            catch (e) { console.warn('Progressive render failed; fallback to full render', e); renderProductsGrid(fullSorted); }
+          } else if (resultsSelect && resultsSelect.value === '__all__') {
+            try { renderAggregatedFromCache(); } catch (e) { console.error('Re-render aggregated after cache update failed', e); }
+          }
+        })
+        .catch(function (err) {
+          var msg = (err && err.message) || '';
+          var isAbort = err && (err.name === 'AbortError');
+          var isTransient = /Failed to fetch|NetworkError|load failed/i.test(msg);
+          if (isAbort || isTransient) {
+            console.info('Background results request aborted/transient for session', sessionId, err);
+            return;
+          }
+          console.warn('Background results load failed for session', sessionId, err);
+        });
+    });
+}
+
+// Lightweight cache helpers
+function cacheKeyFor(sessionId) { return 'br_results_' + String(sessionId); }
+
+// Chunked storage keys for full persistence
+function metaKeyFor(sessionId) { return 'br_results_' + String(sessionId) + '__meta'; }
+function chunkKeyFor(sessionId, idx) { return 'br_results_' + String(sessionId) + '__chunk_' + String(idx); }
+var CACHE_CHUNK_SIZE = 200; // store entries in blocks of 200
+var CACHE_MAX_CHUNKS = 100; // safety cap: up to 20k entries per session
+
+function getCachedSessionEntries(sessionId) {
+  // Prefer in-memory cache
+  var mem = sessionResultsCache[sessionId];
+  if (Array.isArray(mem) && mem.length) return mem;
+
+  // Try new chunked sessionStorage format first
+  try {
+    var metaRaw = sessionStorage.getItem(metaKeyFor(sessionId));
+    if (metaRaw) {
+      var meta = {};
+      try { meta = JSON.parse(metaRaw) || {}; } catch (_) { meta = {}; }
+      var chunkCount = Number(meta.chunkCount || 0);
+      var totalCount = Number(meta.count || 0);
+      var out = [];
+      if (chunkCount > 0) {
+        for (var i = 0; i < chunkCount; i++) {
+          var raw = sessionStorage.getItem(chunkKeyFor(sessionId, i));
+          if (!raw) continue;
+          try {
+            var part = JSON.parse(raw);
+            if (Array.isArray(part) && part.length) out = out.concat(part);
+          } catch (_) {}
+        }
+      }
+      if (!out.length && totalCount > 0) {
+        // Fallback: legacy single-key format if chunks missing
+        var legacyRaw = sessionStorage.getItem(cacheKeyFor(sessionId));
+        if (legacyRaw) {
+          try {
+            var legacy = JSON.parse(legacyRaw) || {};
+            var arrLegacy = Array.isArray(legacy.entries) ? legacy.entries : [];
+            if (arrLegacy.length) out = arrLegacy.slice();
+          } catch (_) {}
+        }
+      }
+      if (out.length) {
+        sessionResultsCache[sessionId] = out.slice();
+        sessionCounts[sessionId] = out.length;
+        return out.slice();
+      }
+    }
+  } catch (_) {}
+
+  // Legacy single-key format
+  try {
+    var raw = sessionStorage.getItem(cacheKeyFor(sessionId));
+    if (!raw) return null;
+    var parsed = JSON.parse(raw);
+    var arr = Array.isArray(parsed && parsed.entries) ? parsed.entries : [];
+    if (arr.length) {
+      // Annotate with session metadata for aggregated view
+      var meta = findSession(sessionId) || {};
+      var count = (typeof parsed.count === 'number' ? parsed.count : arr.length);
+      var annotated = arr.map(function (e) {
+        if (e && e.__session_id) return e;
+        var out = Object.assign({}, e);
+        out.__session_id = sessionId;
+        out.__session_keyword = meta.keyword || '';
+        out.__session_created_at = meta.created_at || '';
+        out.__session_products_count = count;
+        return out;
+      });
+      sessionResultsCache[sessionId] = annotated.slice();
+      sessionCounts[sessionId] = count;
+      return annotated.slice();
+    }
+  } catch (_) {}
+  return null;
+}
+
+function removeSessionCachedEntries(sessionId) {
+  try {
+    // Remove legacy blob
+    sessionStorage.removeItem(cacheKeyFor(sessionId));
+    // Remove meta and chunks
+    var metaRaw = sessionStorage.getItem(metaKeyFor(sessionId));
+    var chunkCount = 0;
+    if (metaRaw) {
+      try {
+        var meta = JSON.parse(metaRaw) || {};
+        chunkCount = Number(meta.chunkCount || 0);
+      } catch (_) {}
+    }
+    sessionStorage.removeItem(metaKeyFor(sessionId));
+    // Remove known chunk count, plus a safety sweep up to the cap
+    var max = chunkCount > 0 ? Math.min(chunkCount + 5, CACHE_MAX_CHUNKS) : CACHE_MAX_CHUNKS;
+    for (var i = 0; i < max; i++) {
+      sessionStorage.removeItem(chunkKeyFor(sessionId, i));
+    }
+  } catch (_) {}
+}
+
+function saveCachedSessionEntries(sessionId, entries) {
+  var arr = Array.isArray(entries) ? entries.slice() : [];
+  // Annotate entries with session metadata for aggregated view rendering
+  var meta = findSession(sessionId) || {};
+  var annotated = arr.map(function (e) {
+    var out = Object.assign({}, e);
+    out.__session_id = sessionId;
+    out.__session_keyword = meta.keyword || '';
+    out.__session_created_at = meta.created_at || '';
+    // will be set to length below and stay current via sessionCounts
+    out.__session_products_count = arr.length;
+    return out;
   });
 
-  if (remaining === 0) { showLoading(false); }
+  sessionResultsCache[sessionId] = annotated;
+  sessionCounts[sessionId] = annotated.length;
+  upsertResultsSelect();
+
+  // Persist full entries in chunked sessionStorage
+  try {
+    // Clear any previous chunks to avoid stale leftover blocks
+    removeSessionCachedEntries(sessionId);
+
+    var chunkCount = Math.ceil(annotated.length / CACHE_CHUNK_SIZE);
+    for (var i = 0; i < chunkCount; i++) {
+      var start = i * CACHE_CHUNK_SIZE;
+      var end = Math.min(start + CACHE_CHUNK_SIZE, annotated.length);
+      var part = annotated.slice(start, end);
+      sessionStorage.setItem(chunkKeyFor(sessionId, i), JSON.stringify(part));
+    }
+    var metaBlob = { count: annotated.length, chunkCount: chunkCount, ts: Date.now() };
+    sessionStorage.setItem(metaKeyFor(sessionId), JSON.stringify(metaBlob));
+  } catch (_) {
+    // Fallback — at least keep a capped preview (legacy format)
+    try {
+      var capped = annotated.slice(0, 200);
+      var blob = JSON.stringify({ entries: capped, count: annotated.length, ts: Date.now() });
+      sessionStorage.setItem(cacheKeyFor(sessionId), blob);
+    } catch (_2) {}
+  }
 }
 
+// Progressive renderer: append batches without spinner
+function progressiveRenderSession(sessionId, sortedEntries, initialCount) {
+  var total = Array.isArray(sortedEntries) ? sortedEntries.length : 0;
+  var count = Math.max(0, Math.min(initialCount || 0, total));
+  var batch = 12;
+  var delayMs = 120;
 
-  function renderProductsGrid(entries) {
+  function isStillSelected() {
+    return resultsSelect && String(resultsSelect.value) === String(sessionId);
+  }
+
+  function step() {
+    if (!isStillSelected()) return;
+    count = Math.min(total, count + batch);
+    try { renderProductsGrid(sortedEntries.slice(0, count)); } catch (e) { console.error('Progressive render failed', e); }
+    if (count < total) setTimeout(step, delayMs);
+  }
+
+  if (count < total) setTimeout(step, delayMs);
+  if (count === 0 && total > 0 && isStillSelected()) {
+    try { renderProductsGrid(sortedEntries.slice(0, Math.min(8, total))); } catch (e) { console.error('Initial progressive render failed', e); }
+    count = Math.min(8, total);
+    if (count < total) setTimeout(step, delayMs);
+  }
+}
+
+function renderProductsGrid(entries) {
   productsGrid.innerHTML = '';
   if (!entries || entries.length === 0) {
     // While loading, suppress the empty-state message
@@ -1117,28 +1836,48 @@ function showConfirmDelete(session) {
       var views = (entry && entry.views != null) ? entry.views : '—';
       var favorers = (entry && entry.num_favorers != null) ? entry.num_favorers : '—';
 
-      // Price display (original/base)
+       // Price display (original/base)
       var priceObj = (entry && entry.price) || {};
-      var amount = (priceObj && priceObj.amount != null) ? priceObj.amount : (entry && entry.price_amount);
-      var divisor = (priceObj && priceObj.divisor != null) ? priceObj.divisor : (entry && entry.price_divisor);
-      var currency = (priceObj.currency_code || entry.price_currency || '').trim();
-      var priceDisplay = (entry && entry.price_display) || null;
-      if (!priceDisplay) {
-        try {
-          if (typeof amount === 'number' && typeof divisor === 'number' && divisor) {
-            var val = amount / divisor;
-            var disp = (val.toFixed(2)).replace(/\.00$/, '');
-            priceDisplay = disp + (currency ? (' ' + currency) : '');
-          }
-        } catch (_) {}
-      }
+        var amount = (priceObj && priceObj.amount != null) ? priceObj.amount : (entry && entry.price_amount);
+        var divisor = (priceObj && priceObj.divisor != null) ? priceObj.divisor : (entry && entry.price_divisor);
+        var currency = (priceObj.currency_code || entry.price_currency || '').trim();
+        var priceDisplay = (entry && entry.price_display) || null;
 
-      // Sale price: always reuse base currency
+        if (!priceDisplay) {
+            try {
+                if (typeof amount === 'number' && typeof divisor === 'number' && divisor) {
+                    var val = amount / divisor;
+                    var disp = (val.toFixed(2)).replace(/\.00$/, '');
+                    priceDisplay = disp + (currency ? (' ' + currency) : '');
+                }
+            } catch (_) {}
+        }
+        // Fallback: compute from price_value + currency if display and amount/divisor are missing
+        if (!priceDisplay && typeof entry.price_value === 'number' && isFinite(entry.price_value)) {
+            try {
+                var pv = Math.round(entry.price_value * 100) / 100;
+                var pvDisp = pv.toFixed(2).replace(/\.00$/, '');
+                priceDisplay = pvDisp + (currency ? (' ' + currency) : '');
+            } catch (_) {}
+        }
+
+        // Sale price: normalize number and append currency code
       var promoDesc = (entry && (entry.buyer_applied_promotion_description || entry.buyer_promotion_description)) || '';
       var saleDisplay = '';
       var saleVal = null;
 
-      if (typeof entry.sale_price_value === 'number' && isFinite(entry.sale_price_value)) {
+      if (entry && typeof entry.sale_price_display === 'string' && entry.sale_price_display.trim()) {
+        var dispClean = entry.sale_price_display.replace(/[^0-9.,]/g, '').trim();
+        var normalized = dispClean;
+        if (normalized.indexOf(',') !== -1 && normalized.indexOf('.') === -1) { normalized = normalized.replace(',', '.'); }
+        var asNum = parseFloat(normalized.replace(/,/g, ''));
+        if (!isNaN(asNum) && isFinite(asNum)) {
+          var numStr = (Math.round(asNum * 100) / 100).toFixed(2).replace(/\.00$/, '');
+          saleDisplay = numStr + (currency ? (' ' + currency) : '');
+        } else {
+          saleDisplay = dispClean + (currency ? (' ' + currency) : '');
+        }
+      } else if (typeof entry.sale_price_value === 'number' && isFinite(entry.sale_price_value)) {
         saleVal = entry.sale_price_value;
       } else if (entry && typeof entry.sale_subtotal_after_discount === 'string' && entry.sale_subtotal_after_discount.trim()) {
         try {
@@ -1151,6 +1890,8 @@ function showConfirmDelete(session) {
         var baseVal = null;
         if (typeof amount === 'number' && typeof divisor === 'number' && divisor) {
           baseVal = amount / divisor;
+        } else if (typeof entry.price_value === 'number' && isFinite(entry.price_value)) {
+          baseVal = entry.price_value;
         }
         if (baseVal != null) {
           try {
@@ -1162,10 +1903,18 @@ function showConfirmDelete(session) {
           } catch (_) {}
         }
       }
-      if (saleVal != null) {
+      if (!saleDisplay && saleVal != null) {
         var saleStr = (Math.round(saleVal * 100) / 100).toFixed(2).replace(/\.00$/, '');
         saleDisplay = saleStr + (currency ? (' ' + currency) : '');
       }
+
+      var hasSale = !!saleDisplay;
+      var baseCellClass = 'px-2 py-1 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs';
+      var centeredClass = baseCellClass + ' h-full flex items-center justify-center text-center';
+      var colCenteredClass = baseCellClass + ' h-full flex flex-col items-center justify-center text-center';
+
+      // Spacer line used ONLY for non-sale rows
+      var spacerLineHtml = '<div class="metric-spacer" aria-hidden="true" style="height:0.5rem;"></div>';
 
       var card = document.createElement('article');
       card.className = 'product-card';
@@ -1174,27 +1923,43 @@ function showConfirmDelete(session) {
         ? '<img class="product-media" src="' + image + '" ' + (srcset ? ('srcset="' + srcset + '"') : '') + ' alt="">'
         : '<div class="product-media-placeholder">No image</div>';
 
-      // Price cell showing sale if present: split into two lines
+      // Price: two-line and column layout only when sale exists; otherwise single-line centered
       var priceCellHtml = '';
-      if (saleDisplay) {
+      if (hasSale) {
         priceCellHtml =
-          '<div class="px-2 py-1 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs">' +
+          '<div class="' + colCenteredClass + ' metric-cell metric-cell-price">' +
           '  <div>Price: ' + escapeHtml(priceDisplay || '—') + '</div>' +
           '  <div>Sale Price: <span class="text-emerald-600 font-semibold">' + escapeHtml(saleDisplay) + '</span></div>' +
           '</div>';
       } else {
         priceCellHtml =
-          '<div class="px-2 py-1 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs">Price: ' + escapeHtml(priceDisplay || '—') + '</div>';
+          '<div class="' + centeredClass + ' metric-cell metric-cell-price">Price: ' + escapeHtml(priceDisplay || '—') + '</div>';
       }
+      // Favourites cell: no spacers for sale rows; spacers only for non-sale rows
+      var favouritesCellHtml = '';
+      if (hasSale) {
+        favouritesCellHtml =
+          '<div class="' + centeredClass + ' metric-cell metric-cell-favourites">Favourites: ' + escapeHtml(String(favorers)) + '</div>';
+      } else {
+        favouritesCellHtml =
+          '<div class="' + colCenteredClass + ' metric-cell metric-cell-favourites">' +
+            spacerLineHtml +
+            '<div>Favourites: ' + escapeHtml(String(favorers)) + '</div>' +
+            spacerLineHtml +
+          '</div>';
+      }
+
+      var demandCellHtml = '<div class="' + baseCellClass + '">Demand: ' + (demand !== null ? escapeHtml(String(demand)) : '—') + '</div>';
+      var viewsCellHtml  = '<div class="' + baseCellClass + '">Views: ' + escapeHtml(String(views)) + '</div>';
 
       card.innerHTML =
         mediaHtml +
         '<div class="product-body">' +
         '  <div class="product-title">' + escapeHtml(title) + '</div>' +
-        '  <div class="grid grid-cols-2 gap-2 mt-1">' +
-        '    <div class="px-2 py-1 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs">Demand: ' + (demand !== null ? escapeHtml(String(demand)) : '—') + '</div>' +
-        '    <div class="px-2 py-1 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs">Views: ' + escapeHtml(String(views)) + '</div>' +
-        '    <div class="px-2 py-1 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs">Favourites: ' + escapeHtml(String(favorers)) + '</div>' +
+        '  <div class="grid grid-cols-2 gap-2 mt-1 items-stretch">' +
+             demandCellHtml +
+             viewsCellHtml +
+             favouritesCellHtml +
              priceCellHtml +
         '  </div>' +
         '  <div class="mt-1 flex flex-col gap-1">' +
@@ -1216,7 +1981,112 @@ function showConfirmDelete(session) {
         });
       }
 
+      // Insert "Product Session Details" collapsible only in aggregated view
+      var isAggregatedView = (resultsSelect && resultsSelect.value === '__all__');
+      if (isAggregatedView) {
+        var body = card.querySelector('.product-body');
+        var actions = card.querySelector('.product-actions');
+
+        var sessionId = entry.__session_id;
+        var sKeyword = entry.__session_keyword || '';
+        var sCreated = entry.__session_created_at || '';
+        var sDate = fmtDateISO(sCreated);
+        var sTime = fmtTimeISO(sCreated);
+        var sCount = (sessionCounts && sessionCounts[sessionId] != null)
+          ? sessionCounts[sessionId]
+          : (entry.__session_products_count != null ? entry.__session_products_count : null);
+
+        var toggleWrap = document.createElement('div');
+        toggleWrap.className = 'mt-0.5'; // slimmer spacing than before
+
+        var toggleBtn = document.createElement('button');
+        toggleBtn.type = 'button';
+        toggleBtn.className = 'w-full text-left px-2 py-1 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs';
+        toggleBtn.textContent = 'Product Session Details ▾';
+        toggleBtn.setAttribute('aria-expanded', 'false');
+
+        var details = document.createElement('div');
+        details.className = 'rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs px-2 py-2';
+        // Slim collapse: no margin when closed; expand to content height when open
+        details.style.transition = 'max-height 0.22s ease, opacity 0.22s ease, margin-top 0.22s ease';
+        details.style.overflow = 'hidden';
+        details.style.maxHeight = '0';
+        details.style.opacity = '0';
+        details.style.marginTop = '0';
+
+        details.innerHTML =
+          '<div class="grid grid-cols-2 gap-2">' +
+          '  <div class="px-2 py-1 rounded border border-[var(--border)] bg-[var(--surface-2)]">Session keyword: ' + escapeHtml(sKeyword || '—') + '</div>' +
+          '  <div class="px-2 py-1 rounded border border-[var(--border)] bg-[var(--surface-2)]">Session Date: ' + escapeHtml(sDate || '—') + '</div>' +
+          '  <div class="px-2 py-1 rounded border border-[var(--border)] bg-[var(--surface-2)]">Session Time: ' + escapeHtml(sTime || '—') + '</div>' +
+          '  <div class="px-2 py-1 rounded border border-[var(--border)] bg-[var(--surface-2)]">Products found: ' + escapeHtml(String(sCount != null ? sCount : '—')) + '</div>' +
+          '</div>';
+
+        toggleWrap.appendChild(toggleBtn);
+        toggleWrap.appendChild(details);
+
+        if (body) {
+          if (actions) body.insertBefore(toggleWrap, actions);
+          else body.appendChild(toggleWrap);
+        } else {
+          card.appendChild(toggleWrap);
+        }
+
+        var open = false;
+        toggleBtn.addEventListener('click', function (e) {
+          e.preventDefault();
+          open = !open;
+          toggleBtn.textContent = open ? 'Product Session Details ▴' : 'Product Session Details ▾';
+          toggleBtn.setAttribute('aria-expanded', String(open));
+          if (open) {
+            details.style.maxHeight = details.scrollHeight + 'px';
+            details.style.opacity = '1';
+            details.style.marginTop = '4px'; // minimal gap when open
+          } else {
+            details.style.maxHeight = '0';
+            details.style.opacity = '0';
+            details.style.marginTop = '0';   // no gap when collapsed
+          }
+        });
+      }
+
       productsGrid.appendChild(card);
+
+      // Equalize heights + enforce centering ONLY for rows with a sale price
+      setTimeout(function () {
+        var favEl = card.querySelector('.metric-cell-favourites');
+        var priceEl = card.querySelector('.metric-cell-price');
+        if (!favEl || !priceEl) return;
+
+        // Always center content
+        favEl.style.display = 'flex';
+        favEl.style.alignItems = 'center';
+        favEl.style.justifyContent = 'center';
+        favEl.style.textAlign = 'center';
+        favEl.style.boxSizing = 'border-box';
+
+        priceEl.style.display = 'flex';
+        priceEl.style.alignItems = 'center';
+        priceEl.style.justifyContent = 'center';
+        priceEl.style.textAlign = 'center';
+        priceEl.style.boxSizing = 'border-box';
+        priceEl.style.flexDirection = hasSale ? 'column' : 'row';
+
+        if (hasSale) {
+          // Match both to the sale-price box height
+          var target = priceEl.offsetHeight;
+          favEl.style.height = target + 'px';
+          priceEl.style.height = target + 'px';
+          favEl.style.minHeight = target + 'px';
+          priceEl.style.minHeight = target + 'px';
+        } else {
+          // No sale in this 4-cell row: keep them slim, no forced height
+          favEl.style.height = '';
+          priceEl.style.height = '';
+          favEl.style.minHeight = '';
+          priceEl.style.minHeight = '';
+        }
+      }, 0);
   });
     }
 
@@ -1326,36 +2196,47 @@ function showProductDetail(entry) {
 
   // Price formatting: prefer server-provided display, otherwise compute
   var priceDisplay = (entry && entry.price_display) || '';
-  var amount = (entry && entry.price_amount);
-  var divisor = (entry && entry.price_divisor) || 0;
-  var currency = (entry && entry.price_currency) || '';
-  var baseVal = null;
-  if (!priceDisplay) {
-    if (typeof amount === 'number' && typeof divisor === 'number' && divisor) {
-      baseVal = amount / divisor;
-      var disp = (Math.round(baseVal * 100) / 100).toFixed(2).replace(/\.00$/, '');
-      priceDisplay = disp + (currency ? (' ' + currency) : '');
+    var amount = (entry && entry.price_amount);
+    var divisor = (entry && entry.price_divisor) || 0;
+    var currency = (entry && entry.price_currency) || '';
+    var baseVal = null;
+    if (!priceDisplay) {
+      if (typeof amount === 'number' && typeof divisor === 'number' && divisor) {
+        baseVal = amount / divisor;
+        var disp = (Math.round(baseVal * 100) / 100).toFixed(2).replace(/\.00$/, '');
+        priceDisplay = disp + (currency ? (' ' + currency) : '');
+      }
+    } else {
+      if (typeof amount === 'number' && typeof divisor === 'number' && divisor) {
+        baseVal = amount / divisor;
+      }
     }
-  } else {
-    if (typeof amount === 'number' && typeof divisor === 'number' && divisor) {
-      baseVal = amount / divisor;
-    }
-  }
 
-  // Sale info and sale price (prefer backend)
-  var promoName = (entry && entry.buyer_promotion_name) || '';
-  var promoShopName = (entry && entry.buyer_shop_promotion_name) || '';
-  var promoDesc = (entry && (entry.buyer_applied_promotion_description || entry.buyer_promotion_description)) || '';
-  var saleDisplay = (entry && entry.sale_price_display) || '';
-  if (!saleDisplay && baseVal != null) {
-    var percentMatch = (promoDesc || '').match(/(\d+(?:\.\d+)?)\s*%/);
-    var salePercent = percentMatch ? parseFloat(percentMatch[1]) : null;
-    if (salePercent != null && isFinite(salePercent)) {
-      var saleVal = baseVal * (1 - salePercent / 100);
-      var saleStr = (Math.round(saleVal * 100) / 100).toFixed(2).replace(/\.00$/, '');
-      saleDisplay = saleStr + (currency ? (' ' + currency) : '');
+    // Sale info and sale price (prefer backend, append currency code)
+    var promoName = (entry && entry.buyer_promotion_name) || '';
+    var promoShopName = (entry && entry.buyer_shop_promotion_name) || '';
+    var promoDesc = (entry && (entry.buyer_applied_promotion_description || entry.buyer_promotion_description)) || '';
+    var saleDisplay = (entry && entry.sale_price_display) || '';
+
+    if (saleDisplay) {
+      var dispClean = saleDisplay.replace(/[^0-9.,]/g, '').trim();
+      var normalized = dispClean;
+      if (normalized.indexOf(',') !== -1 && normalized.indexOf('.') === -1) { normalized = normalized.replace(',', '.'); }
+      var asNum = parseFloat(normalized.replace(/,/g, ''));
+      if (!isNaN(asNum) && isFinite(asNum)) {
+        saleDisplay = (Math.round(asNum * 100) / 100).toFixed(2).replace(/\.00$/, '') + (currency ? (' ' + currency) : '');
+      } else {
+        saleDisplay = dispClean + (currency ? (' ' + currency) : '');
+      }
+    } else if (baseVal != null) {
+      var percentMatch = (promoDesc || '').match(/(\d+(?:\.\d+)?)\s*%/);
+      var salePercent = percentMatch ? parseFloat(percentMatch[1]) : null;
+      if (salePercent != null && isFinite(salePercent)) {
+        var saleVal = baseVal * (1 - salePercent / 100);
+        var saleStr = (Math.round(saleVal * 100) / 100).toFixed(2).replace(/\.00$/, '');
+        saleDisplay = saleStr + (currency ? (' ' + currency) : '');
+      }
     }
-  }
 
   // Show header back button while in detail
   if (resultsBack) {
@@ -2103,8 +2984,8 @@ function showProductDetail(entry) {
   }
 }
     // Return from detail to the previously selected results
-  function goBackFromDetail() {
-    var saved = sessionStorage.getItem(SELECT_STORAGE_KEY) || '';
+function goBackFromDetail() {
+  var saved = sessionStorage.getItem(SELECT_STORAGE_KEY) || '';
   var current = resultsSelect && resultsSelect.value ? resultsSelect.value : saved;
 
   // Show sort/filter bar again when leaving detail
@@ -2115,54 +2996,100 @@ function showProductDetail(entry) {
   if (resultsBack) resultsBack.classList.add('hidden');
 
   if (!current) {
-    resultsTitle.textContent = 'No session selected';
-    renderEmptyPrompt();
-    return;
-  }
+        var hasAnySessions = Array.isArray(sessions) && sessions.length > 0;
+        if (hasAnySessions) {
+            resultsSelect.value = '__all__';
+            sessionStorage.setItem(SELECT_STORAGE_KEY, '__all__');
+            resultsTitle.textContent = 'All Sessions — aggregated';
+            loadAllSessionsResults();
+            return;
+        }
+        resultsTitle.textContent = 'No session selected';
+        renderEmptyPrompt();
+        return;
+    }
   if (current === '__all__') {
     resultsTitle.textContent = 'All Sessions — aggregated';
+    // Single aggregated load; no auto-refresh
     loadAllSessionsResults();
   } else {
     var s = findSession(current);
     updateResultsTitleForSession(s);
-    loadSessionResults(current, true);
+    var isCompleted = s && String(s.status).toLowerCase() === 'completed';
+    if (isCompleted) {
+      loadSessionResults(current, true);
+    } else {
+      var cached = getCachedSessionEntries(current);
+      if (Array.isArray(cached) && cached.length) {
+        try { renderProductsGrid(applySorting(cached)); } catch (e) { console.error('Render cached failed', e); }
+      } else {
+        showLoading(false);
+        try { renderProductsGrid([]); } catch (_) {}
+      }
+    }
   }
-  }
-
+}
   // Bootstrap
   renderSessionsList();
   upsertResultsSelect();
   (function restoreSelection() {
-    var saved = sessionStorage.getItem(SELECT_STORAGE_KEY);
-    if (saved && resultsSelect) {
-    var hasOption = Array.prototype.some.call(resultsSelect.options, function (opt) { return opt.value === saved; });
-    if (hasOption) {
-      // If saved was "__all__" but there are no sessions, show empty prompt instead of fetching
-      if (saved === '__all__' && (!Array.isArray(sessions) || sessions.length === 0)) {
-        resultsTitle.textContent = 'No session selected';
-        renderEmptyPrompt();
-        if (resultsBack) resultsBack.classList.add('hidden');
-        return;
-      }
-      resultsSelect.value = saved;
-      if (saved === '__all__') {
-        resultsTitle.textContent = 'All Sessions — aggregated';
-        loadAllSessionsResults();
+  // Seed memory cache from sessionStorage on boot so switches are instant
+  try {
+        Array.isArray(sessions) && sessions.forEach(function (s) {
+            if (!s || !s.id) return;
+            getCachedSessionEntries(s.id);
+        });
+    } catch (_) {}
+
+    // Default behavior:
+    // - If there are sessions, default to aggregated view
+    // - If none, show 'No session selected'
+    upsertResultsSelect();
+    var hasAnySessions = Array.isArray(sessions) && sessions.length > 0;
+    var saved = sessionStorage.getItem(SELECT_STORAGE_KEY) || '';
+    var current = resultsSelect && resultsSelect.value ? resultsSelect.value : saved;
+
+    if (hasAnySessions) {
+      if (!saved || saved === '') {
+          resultsSelect.value = '__all__';
+          sessionStorage.setItem(SELECT_STORAGE_KEY, '__all__');
+          resultsTitle.textContent = 'All Sessions — aggregated';
+          loadAllSessionsResults();
+      } else if (saved === '__all__') {
+          resultsSelect.value = '__all__';
+          resultsTitle.textContent = 'All Sessions — aggregated';
+          loadAllSessionsResults();
       } else {
-        var s = findSession(saved);
-        if (!s) {
-          resultsTitle.textContent = 'No session selected';
-          renderEmptyPrompt();
-          if (resultsBack) resultsBack.classList.add('hidden');
-          return;
-        }
-        updateResultsTitleForSession(s);
-        loadSessionResults(saved, true);
+          var s = findSession(saved);
+          if (!s) {
+              resultsSelect.value = '__all__';
+              sessionStorage.setItem(SELECT_STORAGE_KEY, '__all__');
+              resultsTitle.textContent = 'All Sessions — aggregated';
+              loadAllSessionsResults();
+          } else {
+              resultsSelect.value = saved;
+              updateResultsTitleForSession(s);
+              attachStream(saved);
+              var isCompleted = String(s.status).toLowerCase() === 'completed';
+              if (isCompleted) {
+                  loadSessionResults(saved, true);
+              } else {
+                  var cached = getCachedSessionEntries(saved);
+                  if (Array.isArray(cached) && cached.length) {
+                      try { renderProductsGrid(applySorting(cached)); } catch (e) { console.error('Render cached failed', e); }
+                  } else {
+                      showLoading(false);
+                      try { renderProductsGrid([]); } catch (_) {}
+                  }
+              }
+          }
       }
+  } else {
+      resultsTitle.textContent = 'No session selected';
       if (resultsBack) resultsBack.classList.add('hidden');
-      return;
-    }
+      stopAggregatedAutoRefresh();
+      renderEmptyPrompt();
   }
-  renderEmptyPrompt();
-  })();
+  updatePolling();
+})();
 })();

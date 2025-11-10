@@ -9,6 +9,7 @@ from core.views import (
 from keyword_insight.views import keyword_insight_search, keyword_insight_debug
 from bulk_research.views import bulk_research_start, bulk_research_stream, bulk_research_result, bulk_research_list
 from bulk_research.views import bulk_research_delete
+from bulk_research.views import bulk_research_reconnect
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -35,4 +36,5 @@ urlpatterns = [
     path('api/bulk-research/result/<int:session_id>/', bulk_research_result, name='bulk_research_result'),
     path('api/bulk-research/list/', bulk_research_list, name='bulk_research_list'),
     path('api/bulk-research/delete/<int:session_id>/', bulk_research_delete, name='bulk_research_delete'),
+    path('api/bulk-research/reconnect/<int:session_id>/', bulk_research_reconnect, name='bulk_research_reconnect'),
 ]

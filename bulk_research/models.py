@@ -1,7 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import User
 
-
 class BulkResearchSession(models.Model):
     STATUS_CHOICES = (
         ('ongoing', 'Ongoing'),
@@ -15,7 +14,7 @@ class BulkResearchSession(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='ongoing')
     progress = models.JSONField(default=dict, blank=True)
     result_file = models.TextField(blank=True, default='')
-
+    external_session_id = models.CharField(max_length=200, blank=True, null=True, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)

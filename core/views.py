@@ -183,6 +183,20 @@ def users_bulk_research(request):
         qs = BulkResearchSession.objects.filter(user=request.user).order_by('-created_at')
         sessions_list = []
         for s in qs:
+            # Compute result stats
+            entries_count = 0
+            result_size = len(s.result_file or '')
+            try:
+                if s.result_file:
+                    raw = json.loads(s.result_file)
+                    if isinstance(raw, dict):
+                        if isinstance(raw.get('entries'), list):
+                            entries_count = len(raw['entries'])
+                        elif raw.get('megafile') and isinstance(raw['megafile'].get('entries'), list):
+                            entries_count = len(raw['megafile']['entries'])
+            except Exception:
+                pass
+
             sessions_list.append({
                 'id': s.id,
                 'keyword': s.keyword,
@@ -195,11 +209,44 @@ def users_bulk_research(request):
                     'keywords': {'total': 0, 'remaining': 0},
                 },
                 'created_at': s.created_at.isoformat(),
+                'entries_count': entries_count,
+                'result_size': result_size,
             })
         sessions_json = json.dumps(sessions_list)
     return render(request, 'users_dasboard/bulk_research/bulk_research.html', {
         'sessions_json': sessions_json
     })
+
+@login_required
+def bulk_research_list(request):
+    qs = BulkResearchSession.objects.filter(user=request.user).order_by('-created_at')
+    data = []
+    for s in qs:
+        # Compute result stats
+        entries_count = 0
+        result_size = len(s.result_file or '')
+        try:
+            if s.result_file:
+                raw = json.loads(s.result_file)
+                if isinstance(raw, dict):
+                    if isinstance(raw.get('entries'), list):
+                        entries_count = len(raw['entries'])
+                    elif raw.get('megafile') and isinstance(raw['megafile'].get('entries'), list):
+                        entries_count = len(raw['megafile']['entries'])
+        except Exception:
+            pass
+
+        data.append({
+            'id': s.id,
+            'keyword': s.keyword,
+            'desired_total': s.desired_total,
+            'status': s.status,
+            'progress': s.progress or BulkResearchSession.build_initial_progress(s.desired_total),
+            'created_at': s.created_at.isoformat(),
+            'entries_count': entries_count,
+            'result_size': result_size,
+        })
+    return JsonResponse({'sessions': data})
 
 @login_required(login_url='/auth/login/')
 def users_single_research(request):
