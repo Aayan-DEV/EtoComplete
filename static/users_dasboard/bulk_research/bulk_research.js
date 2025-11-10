@@ -582,59 +582,70 @@ window.addEventListener('keydown', function (e) {
       return;
     }
     sessions.forEach(function (s) {
-      var item = document.createElement('article');
-      item.className = 'session-row';
-      item.setAttribute('data-session-id', s.id);
+    var item = document.createElement('article');
+    item.className = 'session-row';
+    item.setAttribute('data-session-id', s.id);
 
-      var created = fmtDateISO(s.created_at);
-      item.innerHTML =
-        '<div class="row-line">' +
-        '  <div class="row-title">' + escapeHtml(s.keyword) + '</div>' +
-        '  <div class="row-meta">Desired: ' + (s.desired_total || 0) + ' • Started: ' + created + '</div>' +
-        '</div>' +
-        '<div class="row-progress">' +
-        progressLine('Search', s.progress && s.progress.search, s) +
-        progressLine('Splitting', s.progress && s.progress.splitting, s) +
-        progressLine('Demand', s.progress && s.progress.demand, s) +
-        progressLine('Keywords', s.progress && s.progress.keywords, s) +
-        '</div>' +
-        '<div class="row-status">Status: <span class="status-tag ' + s.status + '">' + s.status + '</span></div>' +
-        '<div class="row-actions">' +
-        '  <button class="link-btn view-results" data-view="' + s.id + '">View Results</button>' +
-        '  <button class="link-btn delete-session ml-2" data-delete="' + s.id + '">Delete</button>' +
-        '</div>';
+    var created = fmtDateISO(s.created_at);
+    item.innerHTML =
+      '<div class="row-line">' +
+      '  <div class="row-title">' + escapeHtml(s.keyword) + '</div>' +
+      '  <div class="row-meta">Desired: ' + (s.desired_total || 0) + ' • Started: ' + created + '</div>' +
+      '</div>' +
+      '<div class="row-progress">' +
+      progressLine('Search', s.progress && s.progress.search, s) +
+      progressLine('Splitting', s.progress && s.progress.splitting, s) +
+      progressLine('Demand', s.progress && s.progress.demand, s) +
+      progressLine('Keywords', s.progress && s.progress.keywords, s) +
+      '</div>' +
+      '<div class="row-status">Status: <span class="status-tag ' + s.status + '">' + s.status + '</span></div>' +
+      '<div class="row-actions">' +
+      // Insert disabled attrs/classes at render time for ongoing sessions
+      '  <button class="link-btn view-results' + (String(s.status).toLowerCase() === 'ongoing' ? ' is-disabled' : '') + '"' +
+      '          data-view="' + s.id + '"' +
+      (String(s.status).toLowerCase() === 'ongoing' ? ' disabled aria-disabled="true" title="Results available after session completes"' : '') +
+      '  >View Results</button>' +
+      '  <button class="link-btn delete-session ml-2" data-delete="' + s.id + '">Delete</button>' +
+      '</div>';
 
-      var btn = item.querySelector('.view-results');
-      if (btn) {
-        btn.addEventListener('click', function (e) {
-          e.stopPropagation();
-          closeSessionsPanel();
-          resultsSelect.value = String(s.id);
-          updateResultsTitleForSession(s);
-          loadSessionResults(s.id, true);
-        });
-      }
-
-      var delBtn = item.querySelector('.delete-session');
-  if (delBtn) {
-    // Make delete unclickable for ongoing sessions
-    if (String(s.status) === 'ongoing') {
-      delBtn.disabled = true;
-      delBtn.title = 'Cannot delete while session is ongoing';
-      delBtn.setAttribute('aria-disabled', 'true');
-    }
-    delBtn.addEventListener('click', function (e) {
-      e.stopPropagation();
-      if (delBtn.disabled) return;
-      showConfirmDelete(s).then(function (confirmed) {
-        if (!confirmed) return;
-        deleteSession(s.id);
+    var btn = item.querySelector('.view-results');
+    if (btn) {
+      btn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        // Defensive: re-check latest status to avoid races
+        var latest = findSession(s.id) || s;
+        if (String(latest.status || '').toLowerCase() === 'ongoing' || btn.disabled || btn.classList.contains('is-disabled')) {
+          e.preventDefault();
+          showToast('Results available after session completes.', 'error');
+          return;
+        }
+        closeSessionsPanel();
+        resultsSelect.value = String(latest.id);
+        updateResultsTitleForSession(latest);
+        loadSessionResults(latest.id, true);
       });
-    });
-  }
+    }
 
-      sessionsList.appendChild(item);
-    });
+    var delBtn = item.querySelector('.delete-session');
+    if (delBtn) {
+      if (String(s.status).toLowerCase() === 'ongoing') {
+        delBtn.disabled = true;
+        delBtn.title = 'Cannot delete while session is ongoing';
+        delBtn.setAttribute('aria-disabled', 'true');
+        delBtn.classList.add('is-disabled');
+      }
+      delBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        if (delBtn.disabled || delBtn.classList.contains('is-disabled')) return;
+        showConfirmDelete(s).then(function (confirmed) {
+          if (!confirmed) return;
+          deleteSession(s.id);
+        });
+      });
+    }
+
+    sessionsList.appendChild(item);
+  });
   }
 
   function progressLine(name, obj, session) {
@@ -1002,12 +1013,19 @@ function showConfirmDelete(session) {
         }
       })
       .catch(function (err) {
-        alert('Failed to load results: ' + err.message);
+        // Suppress noisy alerts on aborted/transient network fetches
+        var msg = (err && err.message) || '';
+        var isAbort = err && (err.name === 'AbortError');
+        var isTransient = /Failed to fetch|NetworkError|load failed/i.test(msg);
+        if (isAbort || isTransient) {
+          console.info('Results request aborted or transient issue for session', sessionId, err);
+          return;
+        }
+        alert('Failed to load results: ' + msg);
         console.error('Results load failed for session', sessionId, err);
       })
       .finally(function () { showLoading(false); restoreScroll(); });
 }
-
   function loadAllSessionsResults() {
   showLoading(true, 'Loading all sessions…');
 
@@ -1100,10 +1118,12 @@ function showConfirmDelete(session) {
       var favorers = (entry && entry.num_favorers != null) ? entry.num_favorers : '—';
 
       // Price display (original/base)
+      var priceObj = (entry && entry.price) || {};
+      var amount = (priceObj && priceObj.amount != null) ? priceObj.amount : (entry && entry.price_amount);
+      var divisor = (priceObj && priceObj.divisor != null) ? priceObj.divisor : (entry && entry.price_divisor);
+      var currency = (priceObj.currency_code || entry.price_currency || '').trim();
       var priceDisplay = (entry && entry.price_display) || null;
       if (!priceDisplay) {
-        var priceObj = (entry && entry.price) || {};
-        var amount = priceObj.amount, divisor = priceObj.divisor, currency = priceObj.currency_code || '';
         try {
           if (typeof amount === 'number' && typeof divisor === 'number' && divisor) {
             var val = amount / divisor;
@@ -1113,27 +1133,38 @@ function showConfirmDelete(session) {
         } catch (_) {}
       }
 
-      // Sale price display: prefer subtotal_after_discount then sale_price_display then computed
+      // Sale price: always reuse base currency
       var promoDesc = (entry && (entry.buyer_applied_promotion_description || entry.buyer_promotion_description)) || '';
-      var saleDisplay = (entry && (entry.sale_subtotal_after_discount || entry.sale_price_display)) || '';
-      if (!saleDisplay) {
-        var priceObj2 = entry && entry.price || {};
-        var amount2 = priceObj2.amount, divisor2 = priceObj2.divisor, currency2 = priceObj2.currency_code || '';
+      var saleDisplay = '';
+      var saleVal = null;
+
+      if (typeof entry.sale_price_value === 'number' && isFinite(entry.sale_price_value)) {
+        saleVal = entry.sale_price_value;
+      } else if (entry && typeof entry.sale_subtotal_after_discount === 'string' && entry.sale_subtotal_after_discount.trim()) {
+        try {
+          var cleaned = entry.sale_subtotal_after_discount.replace(/[^0-9.]/g, '');
+          var parsed = parseFloat(cleaned);
+          if (!isNaN(parsed) && isFinite(parsed)) saleVal = parsed;
+        } catch (_) {}
+      }
+      if (saleVal == null) {
         var baseVal = null;
-        if (typeof amount2 === 'number' && typeof divisor2 === 'number' && divisor2) {
-          baseVal = amount2 / divisor2;
+        if (typeof amount === 'number' && typeof divisor === 'number' && divisor) {
+          baseVal = amount / divisor;
         }
         if (baseVal != null) {
           try {
             var m = (promoDesc || '').match(/(\d+(?:\.\d+)?)\s*%/);
             var pct = m ? parseFloat(m[1]) : null;
             if (pct != null && isFinite(pct)) {
-              var saleVal = baseVal * (1 - pct / 100);
-              var saleStr = (Math.round(saleVal * 100) / 100).toFixed(2).replace(/\.00$/, '');
-              saleDisplay = saleStr + (currency2 ? (' ' + currency2) : '');
+              saleVal = baseVal * (1 - pct / 100);
             }
           } catch (_) {}
         }
+      }
+      if (saleVal != null) {
+        var saleStr = (Math.round(saleVal * 100) / 100).toFixed(2).replace(/\.00$/, '');
+        saleDisplay = saleStr + (currency ? (' ' + currency) : '');
       }
 
       var card = document.createElement('article');
@@ -1143,13 +1174,13 @@ function showConfirmDelete(session) {
         ? '<img class="product-media" src="' + image + '" ' + (srcset ? ('srcset="' + srcset + '"') : '') + ' alt="">'
         : '<div class="product-media-placeholder">No image</div>';
 
-      // Price cell showing sale if present
+      // Price cell showing sale if present: split into two lines
       var priceCellHtml = '';
       if (saleDisplay) {
         priceCellHtml =
           '<div class="px-2 py-1 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs">' +
-          '  <div>Price: <span class="line-through text-[var(--muted)] mr-1">' + escapeHtml(priceDisplay || '—') + '</span>' +
-          '  <span class="text-emerald-600 font-semibold">' + escapeHtml(saleDisplay) + '</span></div>' +
+          '  <div>Price: ' + escapeHtml(priceDisplay || '—') + '</div>' +
+          '  <div>Sale Price: <span class="text-emerald-600 font-semibold">' + escapeHtml(saleDisplay) + '</span></div>' +
           '</div>';
       } else {
         priceCellHtml =
@@ -1224,6 +1255,12 @@ function showProductDetail(entry) {
     // Keywords: can be strings or rich objects with metrics/trend
     var rawKeywords = Array.isArray(entry && entry.keywords) ? entry.keywords.filter(Boolean) : [];
     var materials = Array.isArray(entry && entry.materials) ? entry.materials.filter(Boolean) : [];
+    // Add variations array
+    var variations = Array.isArray(entry && entry.variations)
+      ? entry.variations.filter(function (v) {
+          return v && (v.id || v.title || (Array.isArray(v.options) && v.options.length));
+        })
+      : [];
 
     // Merge backend keyword_insights into rawKeywords for metrics and trend
     var insights = Array.isArray(entry && entry.keyword_insights) ? entry.keyword_insights : [];
@@ -1519,7 +1556,7 @@ function showProductDetail(entry) {
     // More details: compact grid
     '  <div class="md:col-span-2 mt-1 grid grid-cols-2 lg:grid-cols-3 gap-2">' +
     '    <div class="px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm"><div class="text-[var(--muted)] text-xs">Price</div><div class="font-medium break-words">' + escapeHtml(priceDisplay || '—') + '</div></div>' +
-    '    <div class="px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm"><div class="text-[var(--muted)] text-xs">Sale price</div><div class="font-medium break-words">' + escapeHtml(saleDisplay || '—') + '</div></div>' +
+    '    <div class="px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm"><div class="text-[var(--muted)] text-xs">Sale Price</div><div class="font-medium break-words">' + escapeHtml(saleDisplay || '—') + '</div></div>' +
     '    <div class="px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm"><div class="text-[var(--muted)] text-xs">Last modified</div><div class="font-medium break-words">' + escapeHtml(lastModified || '—') + '</div></div>' +
     '    <div class="px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm"><div class="text-[var(--muted)] text-xs">Quantity</div><div class="font-medium break-words">' + escapeHtml(String(quantity)) + '</div></div>' +
     '    <div class="px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm"><div class="text-[var(--muted)] text-xs">Favorers</div><div class="font-medium break-words">' + escapeHtml(String(favorers)) + '</div></div>' +
@@ -1546,32 +1583,32 @@ function showProductDetail(entry) {
          '  </div>' +
          '</div>')
       : '') +
-    // Keywords with copy-all
-    (rawKeywords.length
-      ? ('<div class="col-span-2 lg:col-span-3 px-2 py-2 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm">' +
-         '  <div class="flex items-center justify-between mb-2"><div class="text-[var(--muted)] text-xs">Keywords</div>' +
-         '    <button id="' + copyKeywordsBtnId + '" class="inline-flex items-center gap-2 px-2 py-1 rounded border border-[var(--border)] bg-[var(--surface-1)] text-[var(--text)] hover:bg-[var(--surface-2)] transition">Copy keywords</button>' +
-         '  </div>' +
-         '  <div class="flex flex-wrap gap-1.5">' +
-         normalizedKeywords.map(function(k){ return '<span class="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--surface-1)] px-2 py-1">' + escapeHtml(String(k.text)) + '</span>'; }).join('') +
-         '  </div>' +
-         '</div>')
-      : '') +
-    // Keyword insights: metrics + per-keyword interactive chart
-    (normalizedKeywords.length
-      ? ('<div class="col-span-2 lg:col-span-3 px-2 py-2 rounded border border-[var(--border)] bg-[var(--surface-2)]">' +
-         '  <div class="text-[var(--muted)] text-xs mb-2">Keyword insights</div>' +
-         '  <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">' +
-            keywordCardsHTML +
-         '  </div>' +
-         '</div>')
-      : '') +
     // Materials if any
     (materials.length
       ? ('<div class="col-span-2 lg:col-span-3 px-2 py-2 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm">' +
          '  <div class="text-[var(--muted)] text-xs mb-2">Materials</div>' +
          '  <div class="flex flex-wrap gap-1.5">' +
          materials.map(function(m){ return '<span class="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--surface-1)] px-2 py-1">' + escapeHtml(String(m)) + '</span>'; }).join('') +
+         '  </div>' +
+         '</div>')
+      : '') +
+    // Variations if any
+    (variations.length
+      ? ('<div class="col-span-2 lg:col-span-3 px-2 py-2 rounded border border-[var(--border)] bg-[var(--surface-2)]">' +
+         '  <div class="text-[var(--muted)] text-xs mb-2">Variations</div>' +
+         '  <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">' +
+         variations.map(function(v){ var opts = Array.isArray(v.options) ? v.options : []; return '' +
+           '<div class="px-2 py-2 rounded border border-[var(--border)] bg-[var(--surface-1)]">' +
+           '  <div class="flex items-center justify-between">' +
+           '    <div class="font-medium text-sm break-words">' + escapeHtml(String(v.title || '—')) + '</div>' +
+           '    <div class="text-xs text-[var(--muted)]">ID: ' + escapeHtml(String(v.id || '—')) + '</div>' +
+           '  </div>' +
+           (opts.length
+             ? ('<div class="flex flex-wrap gap-1.5 mt-2">' +
+                opts.map(function(o){ var lbl = escapeHtml(String(o.label || '—')); var val = escapeHtml(String(o.value || '—')); return '<span class="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1 text-xs">' + lbl + ' <span class="text-[var(--muted)] ml-1">(' + val + ')</span></span>'; }).join('') +
+                '</div>')
+             : '<div class="text-xs text-[var(--muted)] mt-2">No options</div>') +
+           '</div>'; }).join('') +
          '  </div>' +
          '</div>')
       : '') +
@@ -2098,22 +2135,34 @@ function showProductDetail(entry) {
   (function restoreSelection() {
     var saved = sessionStorage.getItem(SELECT_STORAGE_KEY);
     if (saved && resultsSelect) {
-      var hasOption = Array.prototype.some.call(resultsSelect.options, function (opt) { return opt.value === saved; });
-      if (hasOption) {
-        resultsSelect.value = saved;
-        if (saved === '__all__') {
-          resultsTitle.textContent = 'All Sessions — aggregated';
-          loadAllSessionsResults();
-        } else {
-          var s = findSession(saved);
-          updateResultsTitleForSession(s);
-          loadSessionResults(saved, true);
-        }
-        // Ensure header back button is hidden on initial render
+    var hasOption = Array.prototype.some.call(resultsSelect.options, function (opt) { return opt.value === saved; });
+    if (hasOption) {
+      // If saved was "__all__" but there are no sessions, show empty prompt instead of fetching
+      if (saved === '__all__' && (!Array.isArray(sessions) || sessions.length === 0)) {
+        resultsTitle.textContent = 'No session selected';
+        renderEmptyPrompt();
         if (resultsBack) resultsBack.classList.add('hidden');
         return;
       }
+      resultsSelect.value = saved;
+      if (saved === '__all__') {
+        resultsTitle.textContent = 'All Sessions — aggregated';
+        loadAllSessionsResults();
+      } else {
+        var s = findSession(saved);
+        if (!s) {
+          resultsTitle.textContent = 'No session selected';
+          renderEmptyPrompt();
+          if (resultsBack) resultsBack.classList.add('hidden');
+          return;
+        }
+        updateResultsTitleForSession(s);
+        loadSessionResults(saved, true);
+      }
+      if (resultsBack) resultsBack.classList.add('hidden');
+      return;
     }
-    renderEmptyPrompt();
+  }
+  renderEmptyPrompt();
   })();
 })();

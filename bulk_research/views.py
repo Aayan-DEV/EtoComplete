@@ -195,6 +195,33 @@ def bulk_research_result(request, session_id: int):
         image_url = primary_image.get('image_url') or ''
         srcset = primary_image.get('srcset') or ''
 
+        # Variations (variations_cleaned.variations)
+        variations_cleaned = popular.get('variations_cleaned') or entry.get('variations_cleaned') or {}
+        var_variations = []
+        try:
+            vlist = variations_cleaned.get('variations') or []
+            if isinstance(vlist, list):
+                for v in vlist:
+                    if not isinstance(v, dict):
+                        continue
+                    vid = v.get('id')
+                    vtitle = v.get('title')
+                    vopts = v.get('options') or []
+                    opts_out = []
+                    if isinstance(vopts, list):
+                        for o in vopts:
+                            if isinstance(o, dict):
+                                opts_out.append({
+                                    'value': o.get('value'),
+                                    'label': o.get('label'),
+                                })
+                    var_variations.append({
+                        'id': vid,
+                        'title': vtitle,
+                        'options': opts_out,
+                    })
+        except Exception:
+            pass
         # Extra product detail fields
         last_modified_ts = popular.get('last_modified_timestamp') or entry.get('last_modified_timestamp')
         last_modified_iso = None
@@ -469,6 +496,8 @@ def bulk_research_result(request, session_id: int):
             'made_at': made_at_display,
             'made_at_iso': made_at_iso,
             'primary_image': { 'image_url': image_url, 'srcset': srcset },
+
+            'variations': var_variations,
 
             # Detail fields
             'user_id': user_id,
