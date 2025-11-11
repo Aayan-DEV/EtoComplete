@@ -69,6 +69,17 @@
   var SELECT_STORAGE_KEY = 'eto_bulk_selected_session';
   var SCROLL_STORAGE_KEY = 'eto_bulk_scroll_y';
 
+  var REOPEN_STORAGE_KEY = 'eto_bulk_reopen_after_update';
+  var pendingReopen = null;
+  try {
+    var rr = localStorage.getItem(REOPEN_STORAGE_KEY);
+    if (rr) { pendingReopen = JSON.parse(rr || 'null') || null; }
+  } catch (_) {}
+  function clearPendingReopen() {
+    try { localStorage.removeItem(REOPEN_STORAGE_KEY); } catch (_) {}
+    pendingReopen = null;
+  }
+
   var allSessionsController = null; // AbortController for aggregated fetches
   
   // Numeric price helper (prefers sale)
@@ -544,10 +555,15 @@ window.addEventListener('beforeunload', stopPolling);
 if (resultsSelect && !window.__bulkResultsChangeInit) {
     window.__bulkResultsChangeInit = true;
     resultsSelect.addEventListener('change', function () {
-    var val = resultsSelect.value;
-    productsGrid.innerHTML = '';
-    if (resultsBack) resultsBack.classList.add('hidden');
-    if (allSessionsController) { try { allSessionsController.abort(); } catch (_) {} allSessionsController = null; }
+      var val = resultsSelect.value;
+      productsGrid.innerHTML = '';
+      if (resultsBack) resultsBack.classList.add('hidden');
+
+      // Exit detail mode when the selection changes
+      __detailOpen = false;
+      __detailOpenListingId = null;
+
+      if (allSessionsController) { try { allSessionsController.abort(); } catch (_) {} allSessionsController = null; }
 
     if (!val) {
         resultsTitle.textContent = 'No session selected';
@@ -676,6 +692,10 @@ function fmtTimeISO(iso) {
 var __resultsLoadingFlag = false;
 var __centerLoadingWrap = null;
 var __centerLoadingIcon = null;
+
+// Freeze grid updates while a product detail is open
+var __detailOpen = false;
+var __detailOpenListingId = null;
 
 function showLoading(on, _label) {
   __resultsLoadingFlag = !!on;
@@ -1423,60 +1443,99 @@ if (resultsSelect && !window.__bulkResultsChangeInit) {
 
 function showConfirmDelete(session) {
   return new Promise(function (resolve) {
+    // Overlay
     var overlay = document.createElement('div');
     overlay.className =
-      'fixed inset-0 z-[100] flex items-center justify-center ' +
-      'bg-black/40 dark:bg-black/60 backdrop-blur-sm';
+      'fixed inset-0 z-[100] grid place-items-center ' +
+      'bg-black/45 dark:bg-black/65 backdrop-blur-sm transition-opacity duration-200';
+    overlay.style.opacity = '0';
 
+    // Modal container
     var modal = document.createElement('div');
     modal.className =
-      'w-full max-w-md rounded-xl shadow-2xl ring-1 ring-black/10 dark:ring-white/10 ' +
-      'bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100';
+      'relative w-[min(92vw,480px)] rounded-2xl shadow-2xl ' +
+      'ring-1 ring-neutral-200 dark:ring-neutral-800 ' +
+      'bg-white dark:bg-neutral-900 ' +
+      'text-neutral-900 dark:text-neutral-100 ' +
+      'transform transition-all duration-200 ease-out ' +
+      'opacity-0 translate-y-2 scale-95';
 
+    // Accessible attributes
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-labelledby', 'confirm-delete-title');
+    modal.setAttribute('aria-describedby', 'confirm-delete-desc');
+
+    // Content
     modal.innerHTML =
       '<div class="p-6">' +
-      '  <h2 class="text-lg font-semibold">Delete Session</h2>' +
-      '  <p class="mt-2 text-sm text-gray-600 dark:text-gray-300">' +
+      '  <div class="flex items-center gap-3">' +
+      '    <div class="flex h-9 w-9 items-center justify-center rounded-full ' +
+      '      bg-red-50 text-red-600 dark:bg-red-950 dark:text-red-400">🗑️</div>' +
+      '    <h2 id="confirm-delete-title" class="text-lg font-semibold tracking-tight">Delete Session</h2>' +
+      '  </div>' +
+      '  <p id="confirm-delete-desc" class="mt-2 text-sm text-neutral-600 dark:text-neutral-300">' +
       '    Are you sure you want to delete ' +
       '    <span class="font-medium">&ldquo;' + (session.keyword ? String(session.keyword) : 'this session') + '&rdquo;</span>? ' +
       '    This action cannot be undone.' +
       '  </p>' +
       '  <div class="mt-6 flex items-center justify-end gap-3">' +
-      '    <button type="button" class="px-4 py-2 rounded-md ' +
-      '      bg-gray-100 text-gray-800 hover:bg-gray-200 ' +
-      '      dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 ' +
-      '      ring-1 ring-gray-200 dark:ring-gray-700">Cancel</button>' +
-      '    <button type="button" class="px-4 py-2 rounded-md ' +
-      '      bg-red-600 text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500">Delete</button>' +
+      '    <button type="button" class="px-3.5 py-2 rounded-md ' +
+      '      bg-neutral-100 text-neutral-800 hover:bg-neutral-200 ' +
+      '      dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700 ' +
+      '      ring-1 ring-neutral-200 dark:ring-neutral-700">Cancel</button>' +
+      '    <button type="button" class="px-3.5 py-2 rounded-md ' +
+      '      bg-red-600 text-white hover:bg-red-700 ' +
+      '      dark:bg-red-500 dark:hover:bg-red-600 ' +
+      '      focus:outline-none focus:ring-2 focus:ring-red-500">Delete</button>' +
       '  </div>' +
       '</div>';
 
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
 
+    // Animate in
+    requestAnimationFrame(function () {
+      overlay.style.opacity = '1';
+      modal.classList.remove('opacity-0', 'translate-y-2', 'scale-95');
+      modal.classList.add('opacity-100', 'translate-y-0', 'scale-100');
+    });
+
     var btns = modal.querySelectorAll('button');
     var cancelBtn = btns[0];
     var delBtn = btns[1];
+    delBtn.focus();
 
     var close = function (value) {
-      if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
-      resolve(value);
+      // Animate out, then remove
+      overlay.style.opacity = '0';
+      modal.classList.remove('opacity-100', 'translate-y-0', 'scale-100');
+      modal.classList.add('opacity-0', 'translate-y-2', 'scale-95');
+      setTimeout(function () {
+        if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        resolve(value);
+      }, 150);
     };
 
     cancelBtn.addEventListener('click', function () { close(false); });
     delBtn.addEventListener('click', function () { close(true); });
+
+    // Close on backdrop click
     overlay.addEventListener('click', function (e) {
       if (e.target === overlay) close(false);
     });
-    document.addEventListener('keydown', function onEsc(e) {
-      if (e.key === 'Escape') {
-        document.removeEventListener('keydown', onEsc);
-        close(false);
-      }
-    });
 
-    // Focus primary action
-    setTimeout(function () { try { delBtn.focus(); } catch (_) {} }, 10);
+    // Keyboard interactions
+    function onKey(e) {
+      if (e.key === 'Escape') {
+        document.removeEventListener('keydown', onKey);
+        close(false);
+      } else if (e.key === 'Enter') {
+        document.removeEventListener('keydown', onKey);
+        close(true);
+      }
+    }
+    document.addEventListener('keydown', onKey);
   });
 }
 
@@ -1500,7 +1559,12 @@ function showConfirmDelete(session) {
     return [];
   }
 
-  var cached = getCachedSessionEntries(sessionId);
+   var cached = getCachedSessionEntries(sessionId);
+    // Skip cache if we are in a forced reopen flow for this session
+    var skipCacheDueToReopen = (pendingReopen && String(pendingReopen.session_id) === String(sessionId));
+    if (skipCacheDueToReopen) {
+      cached = null;
+    }
     if (Array.isArray(cached) && cached.length > 0) {
       // Immediate render from cache; no spinner
       var sortedCached = applySorting(cached);
@@ -1799,11 +1863,12 @@ function progressiveRenderSession(sessionId, sortedEntries, initialCount) {
   }
 
   function step() {
-    if (!isStillSelected()) return;
-    count = Math.min(total, count + batch);
-    try { renderProductsGrid(sortedEntries.slice(0, count)); } catch (e) { console.error('Progressive render failed', e); }
-    if (count < total) setTimeout(step, delayMs);
-  }
+        if (!isStillSelected()) return;
+        if (__detailOpen) return; // stop progressive updates while detail is open
+        count = Math.min(total, count + batch);
+        try { renderProductsGrid(sortedEntries.slice(0, count)); } catch (e) { console.error('Progressive render failed', e); }
+        if (count < total) setTimeout(step, delayMs);
+    }
 
   if (count < total) setTimeout(step, delayMs);
   if (count === 0 && total > 0 && isStillSelected()) {
@@ -1814,6 +1879,8 @@ function progressiveRenderSession(sessionId, sortedEntries, initialCount) {
 }
 
 function renderProductsGrid(entries) {
+  if (__detailOpen) return;
+
   productsGrid.innerHTML = '';
   if (!entries || entries.length === 0) {
     // While loading, suppress the empty-state message
@@ -1824,6 +1891,29 @@ function renderProductsGrid(entries) {
     productsGrid.appendChild(empty);
     return;
   }
+
+  // Try auto-reopen after a hard reload once the target entry is present
+    if (pendingReopen && entries && entries.length) {
+      try {
+        var target = entries.find(function (e) {
+          var lidMatch = String(e && e.listing_id) === String(pendingReopen.listing_id);
+          var sel = (resultsSelect && resultsSelect.value) || '';
+          // In single-session view, match by current selection instead of entry annotation
+          // because entries from server are not annotated with __session_id.
+          var sidMatch = true;
+          if (sel && sel !== '__all__') {
+            sidMatch = String(sel) === String(pendingReopen.session_id);
+          }
+          return lidMatch && sidMatch;
+        });
+        if (target) {
+          clearPendingReopen();
+          showProductDetail(target);
+          return; // detail view will replace grid immediately
+        }
+      } catch (_) {}
+    }
+
   entries.forEach(function (entry) {
       var title = entry && entry.title || '';
       var url = entry && entry.url || '';
@@ -2092,6 +2182,7 @@ function renderProductsGrid(entries) {
 
     // Render a single-product detail view (clears products grid, keeps sidebar intact)
 function showProductDetail(entry) {
+  __detailOpen = true; // entering detail mode
   productsGrid.innerHTML = '';
 
   // Hide sort/filter bar in detail view
@@ -2105,6 +2196,7 @@ function showProductDetail(entry) {
 
   // Key fields under "View on Etsy"
   var listingId = (entry && entry.listing_id != null) ? entry.listing_id : '—';
+  __detailOpenListingId = listingId;
   var demand = (entry && entry.demand != null) ? entry.demand : '—';
   var madeAt = (entry && entry.made_at) || '—';
   var userId = (entry && entry.user_id != null) ? entry.user_id : '—';
@@ -2131,6 +2223,28 @@ function showProductDetail(entry) {
           return v && (v.id || v.title || (Array.isArray(v.options) && v.options.length));
         })
       : [];
+    var hasVariations = !!(Array.isArray(variations) && variations.length) || !!entry.has_variations;
+
+  // Demand extras
+    var demandExtras = (entry && entry.demand_extras) || {};
+    var totalCarts = (demandExtras && demandExtras.total_carts != null) ? demandExtras.total_carts : '—';
+    var deQty = (demandExtras && demandExtras.quantity != null) ? demandExtras.quantity : '—';
+    var estDeliv = demandExtras ? demandExtras.estimated_delivery_date : null;
+    var estDelivDisplay = '—';
+    if (estDeliv !== undefined && estDeliv !== null) {
+      if (typeof estDeliv === 'string') {
+        estDelivDisplay = estDeliv;
+      } else if (typeof estDeliv === 'number') {
+        try {
+          var dED = new Date(estDeliv * 1000);
+          estDelivDisplay = isFinite(dED.getTime()) ? dED.toLocaleDateString() : String(estDeliv);
+        } catch (_) { estDelivDisplay = String(estDeliv); }
+      } else {
+        estDelivDisplay = String(estDeliv);
+      }
+    }
+    var freeShip = (demandExtras && 'free_shipping' in demandExtras) ? demandExtras.free_shipping : null;
+    var freeShipDisplay = (freeShip === true) ? 'Yes' : (freeShip === false ? 'No' : '—');
 
     // Merge backend keyword_insights into rawKeywords for metrics and trend
     var insights = Array.isArray(entry && entry.keyword_insights) ? entry.keyword_insights : [];
@@ -2423,8 +2537,8 @@ function showProductDetail(entry) {
     '  <div class="flex flex-col gap-3">' +
     '    <h3 class="text-xl md:text-2xl font-semibold break-words">' + escapeHtml(title) + '</h3>' +
     (url
-      ? '    <div><a class="inline-flex items-center gap-2 px-3 py-1.5 rounded-md border border-[var(--border)] bg-[var(--surface-1)] text-[var(--text)] hover:bg-[var(--surface-2)] transition" href="' + url + '" target="_blank" rel="noopener">View on Etsy</a></div>'
-      : '') +
+      ? '    <div class="flex items-center gap-2"><a class="inline-flex items-center gap-2 px-3 py-1.5 rounded-md border border-[var(--border)] bg-[var(--surface-1)] text-[var(--text)] hover:bg-[var(--surface-2)] transition" href="' + url + '" target="_blank" rel="noopener">View on Etsy</a><button id="update-product-btn" class="inline-flex items-center gap-2 px-3 py-1.5 rounded-md border border-[var(--border)] bg-[var(--surface-1)] text-[var(--text)] hover:bg-[var(--surface-2)] transition">Update Product</button></div>'
+      : '    <div><button id="update-product-btn" class="inline-flex items-center gap-2 px-3 py-1.5 rounded-md border border-[var(--border)] bg-[var(--surface-1)] text-[var(--text)] hover:bg-[var(--surface-2)] transition">Update Product</button></div>') +
     '    <div class="mt-1 grid grid-cols-2 lg:grid-cols-3 gap-2">' +
     '      <div class="px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm"><div class="text-[var(--muted)] text-xs">Listing ID</div><div class="font-medium break-words">' + escapeHtml(String(listingId)) + '</div></div>' +
     '      <div class="px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm"><div class="text-[var(--muted)] text-xs">Demand</div><div class="font-medium break-words">' + escapeHtml(String(demand)) + '</div></div>' +
@@ -2443,16 +2557,32 @@ function showProductDetail(entry) {
     '    <div class="px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm"><div class="text-[var(--muted)] text-xs">Favorers</div><div class="font-medium break-words">' + escapeHtml(String(favorers)) + '</div></div>' +
     '    <div class="px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm"><div class="text-[var(--muted)] text-xs">Views</div><div class="font-medium break-words">' + escapeHtml(String(views)) + '</div></div>' +
     '    <div class="px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm"><div class="text-[var(--muted)] text-xs">Listing type</div><div class="font-medium break-words">' + escapeHtml(listingType || '—') + '</div></div>' +
+    // Insert demand_extras next to Views / Listing type
+    '    <div class="px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm"><div class="text-[var(--muted)] text-xs">Total carts</div><div class="font-medium break-words">' + escapeHtml(String(totalCarts)) + '</div></div>' +
+    '    <div class="px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm"><div class="text-[var(--muted)] text-xs">Quantity (DE)</div><div class="font-medium break-words">' + escapeHtml(String(deQty)) + '</div></div>' +
+    '    <div class="px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm"><div class="text-[var(--muted)] text-xs">Est. delivery</div><div class="font-medium break-words">' + escapeHtml(estDelivDisplay) + '</div></div>' +
+    '    <div class="px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm"><div class="text-[var(--muted)] text-xs">Free shipping</div><div class="font-medium break-words">' + escapeHtml(freeShipDisplay) + '</div></div>' +
     (isDigital
       ? ('<div class="px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm"><div class="text-[var(--muted)] text-xs">File data</div><div class="font-medium break-words">' + escapeHtml(fileData) + '</div></div>')
       : '') +
     '    <div class="col-span-2 lg:col-span-3 px-2 py-2 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm">' +
-    '      <div class="flex items-center justify-between mb-1">' +
-    '        <div class="text-[var(--muted)] text-xs">Description</div>' +
-    '        <button id="' + copyDescriptionBtnId + '" class="inline-flex items-center gap-2 px-2 py-1 rounded border border-[var(--border)] bg-[var(--surface-1)] text-[var(--text)] hover:bg-[var(--surface-2)] transition">Copy description</button>' +
-    '      </div>' +
-    '      <div class="whitespace-pre-line break-words max-h-36 overflow-auto">' + escapeHtml(String((entry && entry.description) || '—')) + '</div>' +
-    '    </div>' +
+      '      <div class="flex items-center justify-between mb-1">' +
+      '        <div class="text-[var(--muted)] text-xs">Description</div>' +
+      '        <button id="' + copyDescriptionBtnId + '" class="inline-flex items-center gap-2 px-2 py-1 rounded border border-[var(--border)] bg-[var(--surface-1)] text-[var(--text)] hover:bg-[var(--surface-2)] transition">Copy description</button>' +
+      '      </div>' +
+      '      <div class="whitespace-pre-line break-words max-h-36 overflow-auto">' + escapeHtml(String((entry && entry.description) || '—')) + '</div>' +
+      '    </div>' +
+      // Keywords section with cards + charts
+      (normalizedKeywords.length
+        ? ('<div class="col-span-2 lg:col-span-3 px-2 py-2 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm">' +
+           '  <div class="flex items-center justify-between mb-2"><div class="text-[var(--muted)] text-xs">Keywords</div>' +
+           '    <button id="' + copyKeywordsBtnId + '" class="inline-flex items-center gap-2 px-2 py-1 rounded border border-[var(--border)] bg-[var(--surface-1)] text-[var(--text)] hover:bg-[var(--surface-2)] transition">Copy keywords</button>' +
+           '  </div>' +
+           '  <div class="grid grid-cols-1 md:grid-cols-2 gap-2">' +
+           keywordCardsHTML +
+           '  </div>' +
+           '</div>')
+        : '') +
     // Tags with copy
     (tags.length
       ? ('<div class="col-span-2 lg:col-span-3 px-2 py-2 rounded border border-[var(--border)] bg-[var(--surface-2)] text-xs sm:text-sm">' +
@@ -2568,6 +2698,69 @@ function showProductDetail(entry) {
     '</div>';
 
   productsGrid.appendChild(wrap);
+
+  // Wire up “Update Product” button
+  var upBtn = document.getElementById('update-product-btn');
+    if (upBtn) {
+      upBtn.addEventListener('click', function (e) {
+      e.preventDefault();
+      // Button loading state
+      upBtn.disabled = true;
+      upBtn.textContent = 'Updating…';
+
+      // Decide session id: respect current selection; aggregated uses per-entry annotation
+      var sel = (resultsSelect && resultsSelect.value) || '';
+      var sid = (sel && sel !== '__all__') ? Number(sel) : Number(entry.__session_id || 0);
+
+      // Build payload
+      var payload = {
+        listing_id: listingId,
+        session_id: sid,
+        forced_personalize: !!hasVariations
+      };
+
+      fetch('/api/bulk-research/replace-listing/', {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json', 'Accept': 'application/json' }, csrfHeader()),
+        credentials: 'same-origin',
+        body: JSON.stringify(payload)
+      })
+      .then(function (r) {
+        return r.text().then(function (txt) {
+          var body = {};
+          try { body = JSON.parse(txt || '{}'); } catch (_) {}
+          if (!r.ok) {
+            var msg = (body && body.error) || ('Update failed (' + r.status + ')');
+            throw new Error(msg);
+          }
+          return body;
+        });
+      })
+      .then(function (body) {
+          try {
+            // Bust all caches for this session to ensure fresh fetch on reload
+            removeSessionCachedEntries(sid);
+            delete sessionResultsCache[sid];
+            delete sessionCounts[sid];
+          } catch (_) {}
+          try {
+          // Persist reopen target across hard reload
+            localStorage.setItem(REOPEN_STORAGE_KEY, JSON.stringify({
+              session_id: sid,
+              listing_id: listingId,
+              ts: Date.now()
+            }));
+          } catch (_) {}
+          // Hard reload
+          window.location.reload();
+        })
+        .catch(function (err) {
+        alert('Update failed: ' + err.message);
+        upBtn.disabled = false;
+        upBtn.textContent = 'Update Product';
+      });
+    });
+  }
 
   // Wire up copy buttons
   var copyTagsBtn = document.getElementById(copyTagsBtnId);
@@ -2985,6 +3178,9 @@ function showProductDetail(entry) {
 }
     // Return from detail to the previously selected results
 function goBackFromDetail() {
+  __detailOpen = false;
+  __detailOpenListingId = null;
+
   var saved = sessionStorage.getItem(SELECT_STORAGE_KEY) || '';
   var current = resultsSelect && resultsSelect.value ? resultsSelect.value : saved;
 
@@ -3049,47 +3245,63 @@ function goBackFromDetail() {
     var saved = sessionStorage.getItem(SELECT_STORAGE_KEY) || '';
     var current = resultsSelect && resultsSelect.value ? resultsSelect.value : saved;
 
+    // If we have a pending reopen target, auto-select its session and load it
+    if (hasAnySessions && pendingReopen && pendingReopen.session_id) {
+        var sid = String(pendingReopen.session_id);
+        var sess = findSession(sid);
+        if (sess) {
+            resultsSelect.value = sid;
+            sessionStorage.setItem(SELECT_STORAGE_KEY, sid);
+            updateResultsTitleForSession(sess);
+            attachStream(sid);
+            // Force load for fresh data; renderProductsGrid will auto-open detail
+            loadSessionResults(sid, true);
+            updatePolling();
+            return;
+        }
+    }
+
     if (hasAnySessions) {
-      if (!saved || saved === '') {
-          resultsSelect.value = '__all__';
-          sessionStorage.setItem(SELECT_STORAGE_KEY, '__all__');
-          resultsTitle.textContent = 'All Sessions — aggregated';
-          loadAllSessionsResults();
-      } else if (saved === '__all__') {
-          resultsSelect.value = '__all__';
-          resultsTitle.textContent = 'All Sessions — aggregated';
-          loadAllSessionsResults();
-      } else {
-          var s = findSession(saved);
-          if (!s) {
-              resultsSelect.value = '__all__';
-              sessionStorage.setItem(SELECT_STORAGE_KEY, '__all__');
-              resultsTitle.textContent = 'All Sessions — aggregated';
-              loadAllSessionsResults();
-          } else {
-              resultsSelect.value = saved;
-              updateResultsTitleForSession(s);
-              attachStream(saved);
-              var isCompleted = String(s.status).toLowerCase() === 'completed';
-              if (isCompleted) {
-                  loadSessionResults(saved, true);
-              } else {
-                  var cached = getCachedSessionEntries(saved);
-                  if (Array.isArray(cached) && cached.length) {
-                      try { renderProductsGrid(applySorting(cached)); } catch (e) { console.error('Render cached failed', e); }
-                  } else {
-                      showLoading(false);
-                      try { renderProductsGrid([]); } catch (_) {}
-                  }
-              }
-          }
-      }
-  } else {
-      resultsTitle.textContent = 'No session selected';
-      if (resultsBack) resultsBack.classList.add('hidden');
-      stopAggregatedAutoRefresh();
-      renderEmptyPrompt();
-  }
-  updatePolling();
+        if (!saved || saved === '') {
+            resultsSelect.value = '__all__';
+            sessionStorage.setItem(SELECT_STORAGE_KEY, '__all__');
+            resultsTitle.textContent = 'All Sessions — aggregated';
+            loadAllSessionsResults();
+        } else if (saved === '__all__') {
+            resultsSelect.value = '__all__';
+            resultsTitle.textContent = 'All Sessions — aggregated';
+            loadAllSessionsResults();
+        } else {
+            var s = findSession(saved);
+            if (!s) {
+                resultsSelect.value = '__all__';
+                sessionStorage.setItem(SELECT_STORAGE_KEY, '__all__');
+                resultsTitle.textContent = 'All Sessions — aggregated';
+                loadAllSessionsResults();
+            } else {
+                resultsSelect.value = saved;
+                updateResultsTitleForSession(s);
+                attachStream(saved);
+                var isCompleted = String(s.status).toLowerCase() === 'completed';
+                if (isCompleted) {
+                    loadSessionResults(saved, true);
+                } else {
+                    var cached = getCachedSessionEntries(saved);
+                    if (Array.isArray(cached) && cached.length) {
+                        try { renderProductsGrid(applySorting(cached)); } catch (e) { console.error('Render cached failed', e); }
+                    } else {
+                        showLoading(false);
+                        try { renderProductsGrid([]); } catch (_) {}
+                    }
+                }
+            }
+        }
+    } else {
+        resultsTitle.textContent = 'No session selected';
+        if (resultsBack) resultsBack.classList.add('hidden');
+        stopAggregatedAutoRefresh();
+        renderEmptyPrompt();
+    }
+    updatePolling();
 })();
 })();

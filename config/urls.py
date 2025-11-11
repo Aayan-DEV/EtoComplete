@@ -10,6 +10,9 @@ from keyword_insight.views import keyword_insight_search, keyword_insight_debug
 from bulk_research.views import bulk_research_start, bulk_research_stream, bulk_research_result, bulk_research_list
 from bulk_research.views import bulk_research_delete
 from bulk_research.views import bulk_research_reconnect
+from bulk_research.views import bulk_research_replace_listing
+from keyword_insight.sidebar_qks import quick_keyword_search, quick_keyword_last
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -37,4 +40,7 @@ urlpatterns = [
     path('api/bulk-research/list/', bulk_research_list, name='bulk_research_list'),
     path('api/bulk-research/delete/<int:session_id>/', bulk_research_delete, name='bulk_research_delete'),
     path('api/bulk-research/reconnect/<int:session_id>/', bulk_research_reconnect, name='bulk_research_reconnect'),
+    path('api/qks/search/', quick_keyword_search, name='quick_keyword_search'),
+    path('api/qks/last/', quick_keyword_last, name='quick_keyword_last'),
+    path('api/bulk-research/replace-listing/', bulk_research_replace_listing, name='bulk_research_replace_listing'),
 ]

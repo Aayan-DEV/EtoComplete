@@ -10,10 +10,76 @@ from django.contrib.auth.decorators import login_required
 from django.utils import timezone
 from .stream_manager import bulk_stream_manager
 from .models import BulkResearchSession
+from django.views.decorators.csrf import csrf_exempt 
 
 # Module-level: hardcoded upstream API endpoints
-UPSTREAM_STREAM_URL = "http://136.116.10.105:8001/run/stream"
-UPSTREAM_RECONNECT_URL = "http://136.116.10.105:8001/reconnect/stream"
+UPSTREAM_STREAM_URL = "http://localhost:8002/run/stream"
+UPSTREAM_RECONNECT_URL = "http://localhost:8002/reconnect/stream"
+
+@login_required
+@require_POST
+def bulk_research_replace_listing(request):
+    try:
+        payload = json.loads(request.body or '{}')
+    except Exception:
+        return HttpResponseBadRequest("Invalid JSON")
+
+    listing_id = payload.get('listing_id')
+    session_id = payload.get('session_id')
+    forced_personalize = bool(payload.get('forced_personalize'))
+
+    if not listing_id or not session_id:
+        return HttpResponseBadRequest("Missing listing_id or session_id")
+
+    try:
+        session = BulkResearchSession.objects.get(id=int(session_id), user=request.user)
+    except (BulkResearchSession.DoesNotExist, ValueError):
+        raise Http404("Session not found")
+
+    upstream_body = {
+        'listing_id': listing_id,
+        'user_id': request.user.username,
+        'session_id': session.external_session_id or str(session_id),
+        'forced_personalize': forced_personalize,
+    }
+    headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+
+    try:
+        resp = requests.post("http://localhost:8002/replace-listing", json=upstream_body, headers=headers, timeout=60)
+    except Exception as e:
+        return JsonResponse({'error': f'Upstream request failed: {str(e)}'}, status=502)
+
+    if not resp.ok:
+        # Try to extract message
+        msg = None
+        try:
+            msg = resp.json().get('error')
+        except Exception:
+            msg = (resp.text or '')[:400]
+        return JsonResponse({'error': msg or f'Upstream failed ({resp.status_code})'}, status=resp.status_code)
+
+    try:
+        full_json = resp.json()
+    except Exception:
+        full_json = {}
+
+    # Persist entire session JSON verbatim to result_file
+    BulkResearchSession.objects.filter(id=session.id).update(result_file=json.dumps(full_json))
+    session.result_file = json.dumps(full_json)
+
+    # If entries present, mark completed and normalize progress
+    _ensure_completed_if_result_exists(session)
+
+    # Build simplified entries for client to refresh caches
+    new_entries = _extract_entries_from_result_file(session)
+    simplified = _simplify_entries(new_entries)
+
+    return JsonResponse({
+        'status': 'ok',
+        'session_id': session.id,
+        'entries_count': len(simplified),
+        'entries': simplified,
+    })
 
 def _api_url(name: str, job_id: Optional[str] = None) -> str:
     url = getattr(settings, name, None)
@@ -394,6 +460,7 @@ def _simplify_entries(entries):
             'made_at_iso': made_at_iso,
             'primary_image': { 'image_url': image_url, 'srcset': srcset },
             'variations': var_variations,
+            'has_variations': (len(var_variations) > 0),
             'user_id': user_id,
             'shop_id': shop_id or sh_shop_id,
             'state': state,
@@ -728,14 +795,18 @@ def bulk_research_result(request, session_id: int):
     except BulkResearchSession.DoesNotExist:
         raise Http404("Session not found")
 
-    # Prefer live snapshot
-    snap = bulk_stream_manager.get_snapshot(session_id)
     entries = []
     used_snapshot = False
-    if snap and isinstance(snap.get('entries'), list) and snap['entries']:
-        entries = snap['entries']
-        used_snapshot = True
-    else:
+
+    # Prefer live snapshot only while session is ongoing
+    if session.status == 'ongoing':
+        snap = bulk_stream_manager.get_snapshot(session_id)
+        if snap and isinstance(snap.get('entries'), list) and snap['entries']:
+            entries = snap['entries']
+            used_snapshot = True
+
+    # Fallback to persisted result_file (updated on replace-listing)
+    if not entries:
         raw = {}
         try:
             if session.result_file:
@@ -1093,6 +1164,12 @@ def bulk_research_result(request, session_id: int):
         'review_average': review_average_listing,
         'review_count': review_count_listing,
         'keyword_insights': keyword_insights,
+        'demand_extras': (entry.get('demand_extras') or popular.get('demand_extras') or {
+            'total_carts': None,
+            'quantity': None,
+            'estimated_delivery_date': None,
+            'free_shipping': None
+        }),
         'buyer_promotion_name': buyer_promotion_name,
         'buyer_shop_promotion_name': buyer_shop_promotion_name,
         'buyer_promotion_description': buyer_promotion_description,
