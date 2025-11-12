@@ -13,8 +13,8 @@ from .models import BulkResearchSession
 from django.views.decorators.csrf import csrf_exempt 
 
 # Module-level: hardcoded upstream API endpoints
-UPSTREAM_STREAM_URL = "http://136.116.10.105:8001/run/stream"
-UPSTREAM_RECONNECT_URL = "http://136.116.10.105:8001/reconnect/stream"
+UPSTREAM_STREAM_URL = "https://knowing-quail-helped.ngrok-free.app/run/stream"
+UPSTREAM_RECONNECT_URL = "https://knowing-quail-helped.ngrok-free.app/reconnect/stream"
 
 @login_required
 @require_POST
@@ -45,7 +45,7 @@ def bulk_research_replace_listing(request):
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
 
     try:
-        resp = requests.post("http://136.116.10.105:8001/replace-listing", json=upstream_body, headers=headers, timeout=60)
+        resp = requests.post("https://knowing-quail-helped.ngrok-free.app/replace-listing", json=upstream_body, headers=headers, timeout=60)
     except Exception as e:
         return JsonResponse({'error': f'Upstream request failed: {str(e)}'}, status=502)
 

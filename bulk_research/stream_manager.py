@@ -12,7 +12,7 @@ from .models import BulkResearchSession
 from requests.exceptions import ChunkedEncodingError, ConnectionError, ReadTimeout
 
 # Upstream SSE URL; prefer settings if provided
-UPSTREAM_STREAM_URL = getattr(settings, 'UPSTREAM_STREAM_URL', "http://136.116.10.105:8001/run/stream")
+UPSTREAM_STREAM_URL = getattr(settings, 'UPSTREAM_STREAM_URL', "https://knowing-quail-helped.ngrok-free.app/run/stream")
 
 
 def _map_stage_key(stage: str) -> Optional[str]:
